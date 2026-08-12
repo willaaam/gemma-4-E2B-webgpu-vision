@@ -1,0 +1,23 @@
+{
+  "name": "gemma-4-webgpu-kernels",
+  "version": "1.0.0",
+  "description": "Gemma 4 E2B (QAT Mobile) fully in the browser with WebGPU — text + vision, 100% on-device. Fork of the webml-community Space with an NVIDIA/Windows subgroup fix and a custom WebGPU vision tower.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "node tools/serve.mjs 4173",
+    "start": "node tools/serve.mjs 4173",
+    "check": "node --check tools/serve.mjs && echo 'tools OK'"
+  },
+  "keywords": [
+    "webgpu",
+    "wgsl",
+    "gemma",
+    "llm",
+    "vision",
+    "multimodal",
+    "on-device",
+    "transformers"
+  ],
+  "license": "MIT"
+}

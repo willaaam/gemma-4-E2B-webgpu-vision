@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Gemma 4 Vision · WebGPU test</title>
+<style>
+  :root { --bg:#0b0b0e; --t1:#eee; --t2:#9a9aa5; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --line:#26262e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--t1); font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; padding:24px; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--t2); margin-bottom:16px; }
+  .card { background:#141419; border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+  .row { display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+  button { background:#fff; color:#000; border:0; border-radius:8px; padding:8px 14px; font:inherit; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .log { margin-top:12px; max-height:420px; overflow:auto; font-size:12.5px; }
+  .log div { padding:2px 0; border-bottom:1px solid rgba(255,255,255,.04); white-space:pre-wrap; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  canvas { background:#000; border:1px solid var(--line); border-radius:8px; }
+  #imageBox { display:flex; gap:12px; align-items:center; }
+  .stat b { color:#fff; }
+</style>
+</head>
+<body>
+  <h1>Gemma 4 E2B — vision tower (WebGPU WGSL) test harness</h1>
+  <div class="sub">Verifies the <code>gemma4-vision.js</code> WGSL kernels: QAT matmul vs CPU reference, plus a full image encode sanity check.</div>
+
+  <div class="card">
+    <div class="row">
+      <div id="imageBox">
+        <canvas id="src" width="640" height="480"></canvas>
+        <canvas id="preview" width="144" height="108"></canvas>
+      </div>
+      <div>
+        <div class="row" style="gap:10px">
+          <button id="loadBtn">1 · Load vision weights</button>
+          <button id="mmBtn" disabled>2 · Test QAT matmul (GPU vs CPU)</button>
+          <button id="encBtn" disabled>3 · Encode test image</button>
+        </div>
+        <div style="margin-top:10px" class="stat">Status: <b id="status">idle</b></div>
+      </div>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <script type="module">
+    import { Gemma4Vision } from "./gemma4-vision.js";
+
+    const $ = (id) => document.getElementById(id);
+    const logEl = $("log");
+    function log(msg, cls = "") {
+      const div = document.createElement("div");
+      if (cls) div.className = cls;
+      div.textContent = msg;
+      logEl.appendChild(div);
+      logEl.scrollTop = logEl.scrollHeight;
+      return div;
+    }
+    const setStatus = (t, cls) => { $("status").textContent = t; $("status").className = cls; };
+
+    // Default: stream weights from the Hugging Face Hub (CORS + Range supported,
+    // works from any static host incl. GitHub Pages). Add ?localweights=1 to use a
+    // local copy instead: ./models/google/gemma-4-E2B-it-qat-mobile-transformers/model.safetensors
+    const WEIGHTS = new URLSearchParams(location.search).has("localweights")
+      ? "./models/google/gemma-4-E2B-it-qat-mobile-transformers/model.safetensors"
+      : "https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers/resolve/main/model.safetensors";
+
+    let vision = null;
+
+    // draw a synthetic test image (colored circles + text so the encoder has real signal)
+    function drawTestImage() {
+      const c = $("src");
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#f5f0e8";
+      ctx.fillRect(0, 0, c.width, c.height);
+      const colors = ["#e74c3c", "#3498db", "#f1c40f", "#2ecc71", "#9b59b6", "#e67e22"];
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = colors[i % colors.length];
+        ctx.beginPath();
+        ctx.arc(60 + i * 75, 90 + (i % 3) * 110, 34, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = "#111";
+      ctx.font = "bold 34px sans-serif";
+      ctx.fillText("GEMMA 4 VISION", 60, 420);
+      ctx.font = "20px sans-serif";
+      ctx.fillText("3x3 pooling -> soft tokens", 60, 450);
+      // draw preview
+      const p = $("preview");
+      const pctx = p.getContext("2d");
+      pctx.drawImage(c, 0, 0, p.width, p.height);
+      return c;
+    }
+
+    $("loadBtn").addEventListener("click", async () => {
+      try {
+        setStatus("requesting WebGPU…", "warn");
+        log("requesting WebGPU adapter/device…");
+        if (!navigator.gpu) throw new Error("navigator.gpu unavailable in this browser");
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+        if (!adapter) throw new Error("no adapter");
+        log(`adapter: ${adapter.info?.vendor} ${adapter.info?.architecture} · subgroups ${adapter.features.has("subgroups")}`);
+        vision = await Gemma4Vision.load(WEIGHTS, {
+          onProgress: (e) => {
+            if (e.status === "weights" && e.kind === "bytes") {
+              const mb = (e.loaded / 1048576).toFixed(0);
+              const total = e.total ? (e.total / 1048576).toFixed(0) : "?";
+              $("status").textContent = `downloading vision weights ${mb}/${total} MB`;
+            }
+          },
+        });
+        setStatus("vision loaded", "ok");
+        log("Gemma4Vision loaded. Weight buffers uploaded to GPU.", "ok");
+        $("mmBtn").disabled = false;
+        $("encBtn").disabled = false;
+      } catch (e) {
+        console.error(e);
+        setStatus("error: " + e.message, "bad");
+        log("FAILED: " + e.message, "bad");
+      }
+    });
+
+    // ---- GPU vs CPU reference for the QAT matmul (validates srq + i8 unpack + scale) ----
+    async function testQatMatmul() {
+      const M = 7, K = 64, N = 5;
+      const rnd = mulberry32(0x1234);
+      const a = new Float32Array(M * K).map(() => (rnd() * 2 - 1) * 0.4);
+      const w = new Int8Array(N * K).map(() => (rnd() * 256) - 128 | 0);
+      const ws = new Float32Array(N).map(() => rnd() * 0.2 + 0.01);
+      const inScale = 0.03125, outScale = 0.5;
+
+      // CPU reference
+      const srq = (x, s) => s === 0 ? x : Math.max(-128, Math.min(127, Math.round(x / s))) * s;
+      const ref = new Float32Array(M * N);
+      for (let m = 0; m < M; m++) for (let n = 0; n < N; n++) {
+        let acc = 0;
+        for (let k = 0; k < K; k++) acc += srq(a[m * K + k], inScale) * w[n * K + k];
+        ref[m * N + n] = srq(ws[n] * acc, outScale);
+      }
+
+      // build a tiny device to run the WGSL matmul
+      const adapter = await navigator.gpu.requestAdapter();
+      const device = await adapter.requestDevice();
+      const moduleSrc = `struct Params { M: u32 };
+@group(0) @binding(0) var<storage, read> A: array<f32>;
+@group(0) @binding(1) var<storage, read> Wbits: array<u32>;
+@group(0) @binding(2) var<storage, read> Wscale: array<f32>;
+@group(0) @binding(3) var<storage, read_write> C: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+const K: u32 = ${K}u;
+const N: u32 = ${N}u;
+const IN_SCALE: f32 = ${inScale};
+const OUT_SCALE: f32 = ${outScale};
+fn srq(x: f32, s: f32) -> f32 {
+  if (s == 0.0) { return x; }
+  return clamp(round(x / s), -128.0, 127.0) * s;
+}
+@compute @workgroup_size(64, 4, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let m = gid.x; let n = gid.y;
+  let M = params.M;
+  if (m >= M || n >= N) { return; }
+  let wBase = n * K;
+  var acc = 0.0;
+  for (var k = 0u; k < K; k = k + 1u) {
+    let a = srq(A[m * K + k], IN_SCALE);
+    let w = Wbits[(wBase + k) >> 2u];
+    let byte = (w >> ((k & 3u) * 8u)) & 0xFFu;
+    let sval = i32(select(byte, byte - 256u, byte >= 128u));
+    acc = acc + a * f32(sval);
+  }
+  C[m * N + n] = srq(Wscale[n] * acc, OUT_SCALE);
+}`;
+      const mod = device.createShaderModule({ code: moduleSrc });
+      const pipe = device.createComputePipeline({ layout: "auto", compute: { module: mod, entryPoint: "main" } });
+      const layout = pipe.getBindGroupLayout(0);
+      const mk = (arr, usage) => {
+        const b = device.createBuffer({ size: Math.max(arr.byteLength, 4), usage: usage | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(b, 0, arr);
+        return b;
+      };
+      // pack i8 -> u32 (little-endian 4 bytes)
+      const wU32 = new Uint32Array(Math.ceil((N * K) / 4));
+      for (let i = 0; i < N * K; i++) wU32[i >> 2] |= (w[i] & 0xff) << ((i & 3) * 8);
+      const bufs = [
+        mk(a, GPUBufferUsage.STORAGE),
+        mk(wU32, GPUBufferUsage.STORAGE),
+        mk(ws, GPUBufferUsage.STORAGE),
+        mk(new Float32Array(M * N), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC),
+        mk(new Uint32Array([M, 0, 0, 0]), GPUBufferUsage.UNIFORM),
+      ];
+      const bg = device.createBindGroup({ layout, entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(pipe);
+      pass.setBindGroup(0, bg);
+      pass.dispatchWorkgroups(Math.ceil(M / 64), Math.ceil(N / 4), 1);
+      pass.end();
+      const staging = device.createBuffer({ size: M * N * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+      enc.copyBufferToBuffer(bufs[3], 0, staging, 0, M * N * 4);
+      device.queue.submit([enc.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      const got = new Float32Array(staging.getMappedRange().slice(0));
+      staging.unmap();
+
+      let maxRel = 0, bad = 0;
+      for (let i = 0; i < got.length; i++) {
+        const denom = Math.max(Math.abs(ref[i]), 1e-6);
+        const rel = Math.abs(got[i] - ref[i]) / denom;
+        maxRel = Math.max(maxRel, rel);
+        if (rel > 1e-4) bad++;
+      }
+      log(`QAT matmul GPU vs CPU: maxRel=${maxRel.toExponential(2)} mismatched=${bad}/${got.length}`, maxRel < 1e-4 && bad === 0 ? "ok" : "bad");
+      device.destroy();
+      return maxRel;
+    }
+
+    $("mmBtn").addEventListener("click", async () => {
+      try {
+        setStatus("running QAT matmul test…", "warn");
+        await testQatMatmul();
+        setStatus("matmul test done", "ok");
+      } catch (e) { console.error(e); setStatus("matmul test failed: " + e.message, "bad"); log(e.message, "bad"); }
+    });
+
+    // ---- full image encode ----
+    $("encBtn").addEventListener("click", async () => {
+      try {
+        const canvas = drawTestImage();
+        setStatus("encoding image…", "warn");
+        const t0 = performance.now();
+        const out = await vision.encode(canvas);
+        const ms = (performance.now() - t0).toFixed(0);
+        const f = out.image_features;
+        // sanity stats
+        let sum = 0, sumSq = 0, nz = 0, min = Infinity, max = -Infinity;
+        for (let i = 0; i < f.length; i++) {
+          const v = f[i];
+          sum += v; sumSq += v * v;
+          if (v !== 0) nz++;
+          if (v < min) min = v; if (v > max) max = v;
+        }
+        const mean = sum / f.length;
+        const std = Math.sqrt(sumSq / f.length - mean * mean);
+        log(`encode: ${out.num_patches} patches -> ${out.num_soft_tokens} soft tokens x 1536 in ${ms}ms`, "ok");
+        log(`stats: mean=${mean.toFixed(4)} std=${std.toFixed(4)} min=${min.toFixed(4)} max=${max.toFixed(4)} nonzero=${nz}/${f.length}`, f.length > 0 && Number.isFinite(std) && std > 0.05 ? "ok" : "bad");
+        log(`first 6 features: ${Array.from(f.slice(0, 6)).map((v) => v.toFixed(4)).join(", ")}`);
+        setStatus("encode done", "ok");
+        return out;
+      } catch (e) { console.error(e); setStatus("encode failed: " + e.message, "bad"); log(e.message, "bad"); }
+    });
+
+    function mulberry32(s) {
+      return function () {
+        s |= 0; s = (s + 0x6D2B79F5) | 0;
+        let t = Math.imul(s ^ (s >>> 15), 1 | s);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    drawTestImage();
+    log("Ready. Serve from a local server (WebGPU needs a secure context / localhost), e.g. `python3 -m http.server 4173`.");
+  </script>
+</body>
+</html>
