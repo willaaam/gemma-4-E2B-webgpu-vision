@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script type="importmap">
 {
   "imports": {
@@ -554,6 +555,12 @@
   .bubble.assistant th { background: var(--panel); color: var(--t1); font-weight: 600; }
   .bubble.assistant pre::-webkit-scrollbar, .bubble.assistant table::-webkit-scrollbar { height: 8px; }
   .bubble.assistant pre::-webkit-scrollbar-thumb, .bubble.assistant table::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
+  .bubble.assistant .katex { font-size: 1.05em; color: var(--t1); }
+  .bubble.assistant .katex-display { margin: 0.9em 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+  .bubble.assistant .katex-display::-webkit-scrollbar { height: 6px; }
+  .bubble.assistant .katex-display::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
+  .bubble.assistant .katex .katex-html { color: var(--t1); }
+  .bubble.assistant .katex-error { color: var(--warn); }
 
   .meta {
     font-family: var(--mono);
@@ -569,6 +576,33 @@
   .thinking span:nth-child(3) { animation-delay: 0.36s; }
 
   .caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 2px; vertical-align: -0.16em; background: var(--ok); animation: blink 1s steps(2) infinite; }
+
+  .thinking-block {
+    margin: 0 0 0.9em;
+    border-left: 2px solid var(--line);
+    padding-left: 12px;
+  }
+  .thinking-block summary {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    list-style: none;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--t3);
+  }
+  .thinking-block summary::-webkit-details-marker { display: none; }
+  .thinking-block summary::before { content: "▸ "; }
+  .thinking-block[open] summary::before { content: "▾ "; }
+  .thinking-block .thinking-body {
+    margin-top: 6px;
+    color: var(--t2);
+    opacity: 0.75;
+    font-size: 0.92em;
+  }
+  .thinking-block .thinking-body p { margin: 0 0 0.6em; }
 
   .composer-wrap {
     flex: 0 0 auto;
@@ -643,6 +677,48 @@
     text-transform: uppercase;
     color: var(--t3);
   }
+
+  .thinking-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    color: var(--t3);
+    transition: color 0.2s ease;
+  }
+  .thinking-toggle:hover { color: var(--t1); }
+  .thinking-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .thinking-toggle-track {
+    position: relative;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 17px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .thinking-toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--t3);
+    transition: transform 0.2s ease, background 0.2s ease;
+  }
+  .thinking-toggle input:checked + .thinking-toggle-track {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+  }
+  .thinking-toggle input:checked + .thinking-toggle-track .thinking-toggle-thumb {
+    transform: translateX(13px);
+    background: var(--ok);
+  }
+  .thinking-toggle input:disabled + .thinking-toggle-track { opacity: 0.4; cursor: not-allowed; }
 
   .thread-scroll::-webkit-scrollbar { width: 10px; }
   .thread-scroll::-webkit-scrollbar-thumb { background: var(--line); border: 3px solid var(--bg); border-radius: 10px; }
@@ -1055,6 +1131,11 @@
         </div>
         <div class="composer-meta">
           <div class="attachments" id="attachments" hidden></div>
+          <label class="thinking-toggle" id="thinkingToggle" title="Let the model reason step-by-step before answering">
+            <input type="checkbox" id="thinkingCheck">
+            <span class="thinking-toggle-track"><span class="thinking-toggle-thumb"></span></span>
+            <span class="thinking-toggle-label">Thinking</span>
+          </label>
           <span id="hint">Runs fully on-device — nothing leaves your machine</span>
           <span id="liveStat"></span>
         </div>
@@ -1148,6 +1229,13 @@
       .then((m) => { marked = m.marked; marked.use({ gfm: true, breaks: true }); })
       .catch(() => { marked = null; });
 
+    // KaTeX for LaTeX math in assistant bubbles. Mirrors the marked pattern:
+    // lazy ESM from CDN, graceful null fallback if offline so chat still works.
+    let katex = null;
+    import("https://esm.sh/katex@0.16.11")
+      .then((m) => { katex = m.default ?? m; })
+      .catch(() => { katex = null; });
+
     const $ = (id) => document.getElementById(id);
     const landing = $("landing");
     const chat = $("chat");
@@ -1169,6 +1257,7 @@
     const attachments = $("attachments");
     const hint = $("hint");
     const liveStat = $("liveStat");
+    const thinkingCheck = $("thinkingCheck");
     const kernelsBtn = $("kernelsBtn");
     const kernelsOverlay = $("kernelsOverlay");
 
@@ -1177,6 +1266,8 @@
     let kxCopySource = "";
     let messages = [];
     let pendingImage = null; // { url, name } attached image (encoded as data: URL)
+    let thinkingEnabled = false; // Thinking mode: inject the <|think|> system token
+    let thoughtTokenIds = null; // { soc, eoc } special-token ids for the thought block
     let abortController = null;
     let isGenerating = false;
     let isLoading = false;
@@ -1200,6 +1291,7 @@
     clearBtn.addEventListener("click", clearChat);
     attachBtn.addEventListener("click", () => imageInput.click());
     imageInput.addEventListener("change", onImagePicked);
+    thinkingCheck.addEventListener("change", () => { thinkingEnabled = thinkingCheck.checked; });
     kernelsBtn.addEventListener("click", openKernels);
     kernelsOverlay.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeKernels(); });
     $("kxList").addEventListener("scroll", updateListFade, { passive: true });
@@ -1263,6 +1355,7 @@
         const vision = await Gemma4Vision.load(VISION_WEIGHTS_URL, { host: model.runtime?.host, onProgress: updateVisionProgress });
         model = new VisionGemma4Mobile(model, vision);
         window.__gemmaVision = vision;
+        thoughtTokenIds = model.getSpecialTokenIds?.() ?? null;
 
         const seconds = ((performance.now() - started) / 1000).toFixed(1);
         setStatus("ready", `Ready in <strong>${seconds}s</strong> · on-device`);
@@ -1572,17 +1665,34 @@
       abortController = new AbortController();
 
       let reply = "";
+      let thinkingText = "";
+      let answerText = "";
+      let inThought = false;
       let startedAt = 0, firstTokenAt = 0, endedAt = 0, generatedTokens = 0;
 
       try {
-        const stream = model.generate(messages, { maxNewTokens: 4096, signal: abortController.signal });
+        // Thinking mode: prepend the <|think|> system token so the model reasons
+        // step-by-step before answering. Kept out of `messages` (per-turn setting).
+        const promptMessages = thinkingEnabled ? [{ role: "system", content: "<|think|>" }, ...messages] : messages;
+        const stream = model.generate(promptMessages, { maxNewTokens: 4096, signal: abortController.signal });
         startedAt = performance.now();
-        for await (const { text: full } of stream) {
+        for await (const { text: full, token, delta } of stream) {
           const now = performance.now();
           if (!firstTokenAt) firstTokenAt = now;
           generatedTokens++;
           reply = full;
-          scheduleAssistantRender(bubble, reply);
+          // The engine strips the thought-block delimiters (<|channel> / <channel|>)
+          // from the decoded text, so split on the token stream instead: the soc token
+          // opens the thought block, the eoc token closes it.
+          if (thoughtTokenIds && typeof token === "number") {
+            if (token === thoughtTokenIds.soc) inThought = true;
+            else if (token === thoughtTokenIds.eoc) inThought = false;
+            else if (typeof delta === "string") {
+              if (inThought) thinkingText += delta;
+              else answerText += delta;
+            }
+          }
+          scheduleAssistantRender(bubble, reply, thinkingText, answerText);
           updateLiveStat({ startedAt, firstTokenAt, now, generatedTokens });
         }
       } catch (error) {
@@ -1591,10 +1701,12 @@
       } finally {
         endedAt = performance.now();
         renderState = null; // cancel any pending coalesced render; show the final reply now
-        renderAssistant(bubble, reply, false);
+        renderAssistant(bubble, reply, false, thinkingText, answerText);
         appendMeta(assistant, { startedAt, firstTokenAt, endedAt, generatedTokens });
         scrollDown(); // the meta line is added after the reply — keep it in view
-        messages.push({ role: "assistant", content: reply });
+        // Store only the final answer — never feed the model's own thoughts back
+        // into the next turn's context (Gemma 4 best practice).
+        messages.push({ role: "assistant", content: answerText || reply });
         setGenerating(false);
         liveStat.textContent = "";
         abortController = null;
@@ -1606,6 +1718,7 @@
       isGenerating = on;
       input.disabled = on;
       clearBtn.disabled = on;
+      thinkingCheck.disabled = on;
       sendBtn.style.display = on ? "none" : "";
       stopBtn.style.display = on ? "grid" : "none";
       setStatus(on ? "busy" : "ready", on ? "Generating…" : "Ready · on-device");
@@ -1715,48 +1828,236 @@
 
     // Coalesce streamed renders to one per animation frame — marked re-parses the full reply each
     // call, so parsing per token (≈250/s) would tax decode; rAF caps it to the display rate.
-    function scheduleAssistantRender(bubble, raw) {
-      renderState = { bubble, raw };
+    function scheduleAssistantRender(bubble, raw, thinkingText, answerText) {
+      renderState = { bubble, raw, thinkingText, answerText };
       if (renderScheduled) return;
       renderScheduled = true;
       requestAnimationFrame(() => {
         renderScheduled = false;
         if (!renderState) return;
-        renderAssistant(renderState.bubble, renderState.raw, true);
+        renderAssistant(renderState.bubble, renderState.raw, true, renderState.thinkingText, renderState.answerText);
         scrollDown();
       });
     }
 
-    function renderAssistant(bubble, raw, withCaret) {
+    // ---- Math rendering (KaTeX) ----
+    // Extract LaTeX to placeholders so marked/sanitize don't corrupt it, then
+    // restore as katex.renderToString HTML. Code fences and inline code are
+    // protected first so $ inside code is never treated as math.
+
+    // Placeholder token must not appear in marked output — use a span-like id that
+    // marked leaves as literal text inside the HTML.
+    const MATH_PH = "@@MATH";
+    const CODE_PH = "@@CODE";
+
+    function extractCodePlaceholders(raw, codeStore) {
+      let s = String(raw || "");
+      // fenced code blocks ```...```
+      s = s.replace(/```[\s\S]*?```/g, (m) => {
+        const id = `${CODE_PH}${codeStore.length}@@`;
+        codeStore.push(m);
+        return id;
+      });
+      // inline code `...`
+      s = s.replace(/`[^`]*`/g, (m) => {
+        const id = `${CODE_PH}${codeStore.length}@@`;
+        codeStore.push(m);
+        return id;
+      });
+      return s;
+    }
+
+    function restoreCodePlaceholders(html, codeStore) {
+      let out = html;
+      for (let i = 0; i < codeStore.length; i++) {
+        const ph = `${CODE_PH}${i}@@`;
+        // code placeholders should be replaced with their escaped/marked form
+        // — re-parse them through marked inline so they become <code> as usual
+        const codeSrc = codeStore[i];
+        let rendered;
+        if (marked) {
+          try { rendered = sanitizeHtml(marked.parse(codeSrc)); }
+          catch { rendered = `<code>${escapeHtml(codeSrc.slice(1, -1))}</code>`; }
+        } else {
+          const inner = codeSrc.startsWith("```") ? codeSrc : codeSrc.slice(1, -1);
+          rendered = codeSrc.startsWith("```")
+            ? `<pre><code>${escapeHtml(inner.replace(/^```\w*\n?/, "").replace(/```$/, ""))}</code></pre>`
+            : `<code>${escapeHtml(inner)}</code>`;
+        }
+        // placeholders appear as plain text in the HTML (escaped by marked's paragraph wrapping)
+        // so replace with case that marked may have wrapped; do simple string replace on the escaped placeholder
+        out = out.split(ph).join(rendered);
+        // also handle case where the placeholder got wrapped in <p> by marked
+        out = out.split(`<p>${ph}</p>`).join(rendered);
+      }
+      return out;
+    }
+
+    function extractMathPlaceholders(raw, mathStore) {
+      let s = String(raw || "");
+      const push = (latex, display) => {
+        const id = `${MATH_PH}${mathStore.length}@@`;
+        mathStore.push({ latex, display });
+        return id;
+      };
+      // Preserve escaped dollars so they don't start/close delimiters.
+      const ESC = "@@ESCDOLLAR@@";
+      s = s.replace(/\\\$/g, ESC);
+      // Display math: $$ ... $$  (non-greedy, dotall)
+      s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, body) => push(body, true));
+      // Display math: \[ ... \]
+      s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, body) => push(body, true));
+      // Inline math: \( ... \)
+      s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, body) => push(body, false));
+      // Inline math: $ ... $ — require non-space adjacency on open/close to avoid
+      // matching currency like "$5 and $10". Single char delimiters only.
+      s = s.replace(/(?<!\S)\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\w)/g, (_, body) => {
+        // body must contain non-whitespace and not be only digits/commas (price heuristic)
+        const t = body.trim();
+        if (!t) return `$${body}$`;
+        // if body looks like a price (digits, commas, dots only), leave it
+        if (/^[\d,\.]+$/.test(t)) return `$${body}$`;
+        return push(body, false);
+      });
+      // Restore escaped dollars that were not consumed as math
+      s = s.split(ESC).join("\\$");
+      return s;
+    }
+
+    function renderMathPlaceholders(html, mathStore) {
+      if (mathStore.length === 0) return html;
+      let out = html;
+      for (let i = 0; i < mathStore.length; i++) {
+        const ph = `${MATH_PH}${i}@@`;
+        const { latex, display } = mathStore[i];
+        let rendered;
+        if (katex) {
+          try {
+            rendered = katex.renderToString(latex, { throwOnError: false, displayMode: display, strict: "ignore" });
+          } catch {
+            rendered = display
+              ? `<span class="katex-error">${escapeHtml(latex)}</span>`
+              : `<span class="katex-error">${escapeHtml(latex)}</span>`;
+          }
+        } else {
+          // Offline fallback: show raw LaTeX escaped so $...$ is visible
+          const d = display ? `$$${latex}$$` : `$${latex}$`;
+          rendered = `<code>${escapeHtml(d)}</code>`;
+        }
+        // Placeholders survive marked/sanitize as plain text; replace in HTML.
+        // marked wraps standalone placeholders in <p> — handle both forms.
+        if (out.includes(`<p>${ph}</p>`)) out = out.split(`<p>${ph}</p>`).join(rendered);
+        out = out.split(ph).join(rendered);
+        // Also handle placeholder that got HTML-escaped inside a code-like context
+        out = out.split(escapeHtml(ph)).join(rendered);
+      }
+      return out;
+    }
+
+    function renderMarkdown(raw) {
+      // Protect code, then extract math, then markdown, then restore.
+      const codeStore = [];
+      const mathStore = [];
+      let tmp = extractCodePlaceholders(raw || "", codeStore);
+      tmp = extractMathPlaceholders(tmp, mathStore);
       if (marked) {
         try {
-          bubble.innerHTML = sanitizeHtml(marked.parse(raw || ""));
-          if (withCaret) appendCaret(bubble);
-          return;
-        } catch { /* fall through to the simple renderer */ }
+          let html = sanitizeHtml(marked.parse(tmp));
+          // marked may escape our placeholders — restore math first so placeholders
+          // inside <p> are found correctly, then code.
+          html = renderMathPlaceholders(html, mathStore);
+          // Code placeholders were extracted before marked — but we split them out
+          // and rendered them above outside the main parse for correctness.
+          // If any code placeholders remain (edge: inline code not captured), restore:
+          html = restoreCodePlaceholders(html, codeStore);
+          return html;
+        } catch { /* fall through */ }
       }
-      const safe = escapeHtml(raw || "");
-      const paragraphs = safe.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-      if (paragraphs.length === 0) { bubble.textContent = ""; return; }
-      bubble.innerHTML = paragraphs.map((p) => `<p>${formatInline(p).replace(/\n/g, "<br>")}</p>`).join("");
+      // Fallback without marked: re-inject code as escaped, then paragraphs.
+      // Reconstruct tmp by expanding code placeholders back to raw text before paragraph split.
+      let fallbackRaw = tmp;
+      for (let i = 0; i < codeStore.length; i++) fallbackRaw = fallbackRaw.split(`${CODE_PH}${i}@@`).join(codeStore[i]);
+      // Need to re-extract math for fallback — simpler: build HTML paragraphs then inject math HTML.
+      // Use the same mathStore but on fallbackRaw split: render math placeholders via
+      // temporary split on MATH_PH tokens.
+      const parts = fallbackRaw.split(new RegExp(`(${MATH_PH}\\d+@@)`, "g"));
+      const htmlParts = parts.map((part) => {
+        const m = part.match(new RegExp(`^${MATH_PH}(\\d+)@@$`));
+        if (m) {
+          const idx = Number(m[1]);
+          const { latex, display } = mathStore[idx] || { latex: "", display: false };
+          if (katex) {
+            try { return katex.renderToString(latex, { throwOnError: false, displayMode: display, strict: "ignore" }); }
+            catch { return `<span class="katex-error">${escapeHtml(latex)}</span>`; }
+          }
+          return `<code>${escapeHtml(display ? `$$${latex}$$` : `$${latex}$`)}</code>`;
+        }
+        if (!part.trim()) return "";
+        const safe = escapeHtml(part);
+        const paras = safe.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+        if (paras.length === 0) return "";
+        return paras.map((p) => `<p>${formatInline(p).replace(/\n/g, "<br>")}</p>`).join("");
+      });
+      return htmlParts.join("");
+    }
+
+    function renderAssistant(bubble, raw, withCaret, thinkingText, answerText) {
+      const prevOpen = bubble.querySelector(".thinking-block")?.open;
+      // The thought block opens with the model's "<|channel>thought\n" marker; the
+      // soc token is stripped from the text but the literal "thought" remains
+      // (optionally followed by a newline).
+      const thinking = (thinkingText || "").replace(/^thought\s*/, "");
+      // When a thought split is active, `raw` (=cumulative `full`) already
+      // contains the thinking content, so falling back to it would render the
+      // reasoning twice — once inside the <details> and again as normal text.
+      // Only fall back to `raw` when neither thinking nor answer was split.
+      const answer = (thinking || answerText) ? (answerText || "") : (raw || "");
+      let html = "";
+      if (thinking) {
+        const open = prevOpen ?? true; // preserve the user's collapse state across re-renders
+        html += `<details class="thinking-block"${open ? " open" : ""}><summary>Thinking</summary><div class="thinking-body">${renderMarkdown(thinking)}</div></details>`;
+      }
+      html += renderMarkdown(answer);
+      bubble.innerHTML = html;
       if (withCaret) appendCaret(bubble);
     }
 
     function appendCaret(bubble) {
       const caret = document.createElement("span");
       caret.className = "caret";
-      (bubble.querySelector("p:last-of-type") || bubble).appendChild(caret);
+      // Attach after the last top-level block: <p> or .katex-display (display math),
+      // or inside the last block if it's the only target. The thinking body is
+      // nested inside .thinking-block so it's excluded by :scope.
+      const blocks = bubble.querySelectorAll(":scope > p, :scope > .katex-display, :scope > span.katex-display");
+      if (blocks.length > 0) {
+        const last = blocks[blocks.length - 1];
+        // For .katex-display the caret should sit inline after it, not inside rendered math.
+        if (last.classList.contains("katex-display")) last.after(caret);
+        else last.appendChild(caret);
+        return;
+      }
+      bubble.appendChild(caret);
     }
 
     // Strip anything executable from the model's markdown before inserting it (defence in depth — a
     // local model is the only content source, but raw <script>/event handlers/javascript: URLs are out).
+    // KaTeX output is allowed through: span.katex*, MathML elements, and katex-prefixed classes.
     function sanitizeHtml(html) {
       const tpl = document.createElement("template");
       tpl.innerHTML = html;
       tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta,form").forEach((el) => el.remove());
+      const KA_TEX_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msup","msub","msubsup","mfrac","msqrt","mroot","mtext","mtable","mtr","mtd","annotation","annotation-xml"]);
       tpl.content.querySelectorAll("*").forEach((el) => {
+        const tag = el.tagName.toLowerCase();
+        // Allow MathML tags that KaTeX emits
+        if (KA_TEX_TAGS.has(tag)) return;
         for (const attr of [...el.attributes]) {
           const name = attr.name.toLowerCase();
+          if (name === "class" && /katex/.test(attr.value)) continue;
+          if (name === "style" && el.closest(".katex")) continue;
+          if (name.startsWith("aria-")) continue;
+          if (name === "xmlns" && tag === "math") continue;
+          if (name === "encoding" && tag === "annotation") continue;
           if (name.startsWith("on") || ((name === "href" || name === "src") && /^\s*(javascript|data):/i.test(attr.value))) {
             el.removeAttribute(attr.name);
           }

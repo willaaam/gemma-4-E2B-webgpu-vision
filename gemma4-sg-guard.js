@@ -182,6 +182,59 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
 const mulberry32 = (s) => () => { s |= 0; s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s);
   t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
+// Minimal faithful instantiation of the engine's subgroup-matrix (SGMat) kernels
+// (DenseGemvSgmat / gemm_sgmat / decode-gate-up-norm-sgmat): f16 8x8 left/right
+// matrices, f32 8x8 result, subgroupMatrixLoad/MMA/Store. Some adapters advertise
+// chromium-experimental-subgroup-matrix yet reject specific configs at pipeline
+// creation (e.g. Intel Xe-2 HPG: "Unknown configuration is M(0), N(8), K(8), f16").
+const MINI_SGMAT = `enable f16;
+enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+diagnostic(off, chromium.subgroup_matrix_uniformity);
+
+@group(0) @binding(0) var<storage, read> a: array<f16>;
+@group(0) @binding(1) var<storage, read> b: array<f16>;
+@group(0) @binding(2) var<storage, read_write> c: array<f32>;
+
+@compute @workgroup_size(8, 1, 1)
+fn main(@builtin(local_invocation_index) lid: u32) {
+  var tileA: array<f16, 64>;
+  var tileB: array<f16, 64>;
+  var scratch: array<f32, 64>;
+  var matA: subgroup_matrix_left<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>>(&tileA, 0u, false, 8u);
+  var matB: subgroup_matrix_right<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(&tileB, 0u, true, 8u);
+  var matC: subgroup_matrix_result<f32, 8, 8>;
+  matC = subgroupMatrixMultiplyAccumulate(matA, matB, matC);
+  subgroupMatrixStore(&scratch, 0u, matC, false, 8u);
+  c[lid] = scratch[lid];
+}
+`;
+
+// Returns 'PASS' | 'FAIL(...)'. Only pipeline creation matters — the engine fails at
+// createComputePipeline, so we don't need to run the kernel. If the adapter doesn't
+// advertise the SGMat feature the engine won't use SGMat kernels, so that's a PASS.
+async function sgmatSelfTest(ad) {
+  if (!ad.features.has('chromium-experimental-subgroup-matrix')) return 'PASS';
+  let dev;
+  try {
+    dev = await ad.requestDevice({ requiredFeatures: ['subgroups', 'chromium-experimental-subgroup-matrix'] });
+  } catch (e) {
+    return 'FAIL(request: ' + String(e && e.message || e).slice(0, 80) + ')';
+  }
+  try {
+    const mod = dev.createShaderModule({ code: MINI_SGMAT });
+    const info = await mod.getCompilationInfo();
+    const errs = info.messages.filter(m => m.type === 'error');
+    if (errs.length) return 'FAIL(compile: ' + errs[0].message.slice(0, 80) + ')';
+    dev.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
+    return 'PASS';
+  } catch (e) {
+    return 'FAIL(' + String(e && e.message || e).slice(0, 80) + ')';
+  } finally {
+    dev.destroy();
+  }
+}
+
 // run the mini kernel against a JS reference; returns 'PASS' | 'FAIL(maxRel)' | 'ERR(...)'
 async function selfTest(dev, reduceFn) {
   const M = 2, IN = 512, OUT = 4, WORDS = IN / 8;
@@ -279,10 +332,23 @@ export async function gemma4SgGuard({ force = false } = {}) {
     result.selfTest.butterfly = await selfTest(dev, BFLY_REDUCE);  // the gate
     dev.destroy();
 
-    if (result.selfTest.butterfly === 'PASS') {
+    // SGMat (subgroup-matrix) kernels are a separate feature: some adapters advertise
+    // chromium-experimental-subgroup-matrix yet reject the engine's f16 8x8 config at
+    // pipeline creation (Intel Xe-2 HPG). If SGMat is unusable, keep the (patched)
+    // subgroup kernels but disable only the SGMat feature so the engine picks its
+    // register-blocked non-SGMat fallbacks.
+    result.selfTest.sgmat = await sgmatSelfTest(ad);
+
+    if (result.selfTest.butterfly === 'PASS' && result.selfTest.sgmat === 'PASS') {
       const state = { active: true, patched: 0 };
       installPatcher(state);
       result.mode = 'patched-sg';
+      Object.defineProperty(result, 'patched', { get: () => state.patched });
+    } else if (result.selfTest.butterfly === 'PASS' && result.selfTest.sgmat !== 'PASS') {
+      const state = { active: true, patched: 0 };
+      installPatcher(state);
+      result.mode = 'sgmat-fallback';
+      result.loadOpts = { runtimeOptions: { disabledFeatures: ['chromium-experimental-subgroup-matrix'] } };
       Object.defineProperty(result, 'patched', { get: () => state.patched });
     } else {
       result.mode = 'nosubgroups-fallback';

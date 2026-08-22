@@ -1,0 +1,30 @@
+{
+  "name": "gemma-4-E2B-webgpu-vision",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/workspaces/gemma-4-E2B-webgpu-vision",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/gemma-4-E2B-webgpu-vision,type=bind",
+  // Keep the VS Code agent sandbox ON even inside the container (defense in depth).
+  // Inside the container the main isolation boundary is the container itself,
+  // so network is allowed (needed for npm install / model downloads / dev server).
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "chat.agent.sandbox.enabled": "on",
+        "chat.agent.sandbox.allowAutoApprove": true,
+        "chat.agent.sandbox.allowNetwork": true,
+        "chat.agent.sandbox.allowUnsandboxedCommands": false,
+        "chat.agent.sandbox.retryWithAllowNetworkRequests": true
+      }
+    }
+  },
+  "postCreateCommand": "npm install",
+  "forwardPorts": [4173],
+  "portsAttributes": {
+    "4173": {
+      "label": "gemma-4-E2B-webgpu-vision dev server",
+      "onAutoForward": "notify"
+    }
+  }
+}

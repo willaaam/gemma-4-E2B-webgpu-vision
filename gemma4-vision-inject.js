@@ -223,6 +223,7 @@ export class VisionGemma4Mobile {
   get _generationState() { return this.base._generationState; }
   get _eosTokenIds() { return this.base._eosTokenIds; }
   get _disposed() { return this.base._disposed; }
+  getSpecialTokenIds() { return this.base.getSpecialTokenIds(); }
 
   async* generate(messages, opts = {}) {
     const hasImages = messages.some(
