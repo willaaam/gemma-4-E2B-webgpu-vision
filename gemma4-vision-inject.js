@@ -224,6 +224,44 @@ export class VisionGemma4Mobile {
   get _eosTokenIds() { return this.base._eosTokenIds; }
   get _disposed() { return this.base._disposed; }
   getSpecialTokenIds() { return this.base.getSpecialTokenIds(); }
+  getContextCapabilities() { return this.base.getContextCapabilities?.() ?? null; }
+  ensureContextCapacity(required) { return this.base.ensureContextCapacity?.(required); }
+  countTextTokens(text) { return this.base.countTextTokens?.(text) ?? this.base.countPromptTokens([{ role: "user", content: String(text ?? "") }]); }
+
+  async _expandMessages(messages) {
+    const expanded = [];
+    const segments = [];
+    for (const msg of messages) {
+      if (!Array.isArray(msg.content)) { expanded.push(msg); continue; }
+      const newContent = [];
+      for (const item of msg.content) {
+        if (item && (item.type === "image" || item.type === "image_url")) {
+          const cacheKey = this._imageCacheKey(item);
+          let encoded = this._imageCacheGet(cacheKey);
+          if (!encoded) {
+            const img = await resolveImage(item);
+            const { image_features, num_soft_tokens } = await this.vision.encode(img);
+            encoded = { features: image_features, numSoft: num_soft_tokens };
+            this._imageCachePut(cacheKey, encoded);
+          }
+          segments.push({ features: encoded.features, numSoft: encoded.numSoft, hidden: 1536, startPos: -1 });
+          newContent.push({ type: "text", text: `\n${BOI}${IMAGE_TOKEN.repeat(encoded.numSoft)}${EOI}\n` });
+        } else {
+          newContent.push(item);
+        }
+      }
+      expanded.push({ ...msg, content: newContent });
+    }
+    return { expanded, segments };
+  }
+
+  countPromptTokens(messages) {
+    const hasImages = messages.some(
+      (m) => Array.isArray(m.content) && m.content.some((c) => c && (c.type === "image" || c.type === "image_url"))
+    );
+    if (!hasImages) return this.base.countPromptTokens(messages);
+    return this._expandMessages(messages).then(({ expanded }) => this.base.countPromptTokens(expanded));
+  }
 
   async* generate(messages, opts = {}) {
     const hasImages = messages.some(
@@ -234,34 +272,8 @@ export class VisionGemma4Mobile {
       return;
     }
 
-    // 1) expand every image content item into the placeholder text sequence and
-    //    compute the vision features for it (num_soft_tokens is image-dependent).
-    const expanded = [];
-    const segments = [];
-    for (const msg of messages) {
-      if (!Array.isArray(msg.content)) { expanded.push(msg); continue; }
-      const newContent = [];
-      for (const item of msg.content) {
-        if (item && (item.type === "image" || item.type === "image_url")) {
-          // Check the feature cache first (keyed by url/src) so a repeated image
-          // skips both the fetch (resolveImage) and the ~2s vision encode.
-          const cacheKey = this._imageCacheKey(item);
-          let encoded = this._imageCacheGet(cacheKey);
-          if (!encoded) {
-            const img = await resolveImage(item);
-            const { image_features, num_soft_tokens } = await this.vision.encode(img);
-            encoded = { features: image_features, numSoft: num_soft_tokens };
-            this._imageCachePut(cacheKey, encoded);
-          }
-          segments.push({ features: encoded.features, numSoft: encoded.numSoft, hidden: 1536, startPos: -1 });
-          const placeholders = IMAGE_TOKEN.repeat(encoded.numSoft);
-          newContent.push({ type: "text", text: `\n${BOI}${placeholders}${EOI}\n` });
-        } else {
-          newContent.push(item);
-        }
-      }
-      expanded.push({ ...msg, content: newContent });
-    }
+    // Expand images once here; the same operation is used by exact token counting.
+    const { expanded, segments } = await this._expandMessages(messages);
 
     // 2) tokenize the expanded prompt to find the image-token positions.
     const ids = this.base.encodePrompt(expanded);

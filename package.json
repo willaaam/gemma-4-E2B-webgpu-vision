@@ -19,5 +19,8 @@
     "on-device",
     "transformers"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "opencode-ai": "^1.18.23"
+  }
 }

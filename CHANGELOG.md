@@ -3,6 +3,51 @@
 All notable changes to this fork are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.0] — 2026-08-23
+
+The chat page became a multi-app, fully on-device **AI workstation**.
+
+### Added
+
+- **Workstation shell** — hash-routed single page (`#/chat`, `#/research`,
+  `#/code`, `#/reports`) with a global top bar: model status pill, load
+  progress bar, storage meter and app navigation. The original landing hero is
+  preserved as the entry screen.
+- **Shared services** — `src/services/model-service.js` (single model load,
+  guard orchestration, subscriber-based status), `generation.js` (global
+  single-stream lock + thinking-split + stats), `db.js` (IndexedDB persistence:
+  conversations, reports, documents, settings), `context.js` (token budgeting,
+  chunking, pure-JS BM25 retrieval).
+- **Chat app** — behavior-preserving port of the original chat into
+  `apps/chat/app.js`, plus conversation history (open/delete), autosave and
+  `.md` export.
+- **Documents app** — in-browser parsing of PDF (pdf.js), DOCX (mammoth),
+  TXT/MD/CSV/JSON; full-text stuffing up to the effective runtime budget with
+  automatic BM25 chunk-retrieval fallback; context inspector showing exactly what
+  the model sees; canned actions (summarize, action items, key figures,
+  compare, study questions); vision-tower OCR for scanned pages/images.
+- **Code app** — dual-runtime playground: Python via Pyodide (auto-installs
+  imports from the Pyodide distribution; matplotlib figures captured as PNGs;
+  micropip installs any pure-Python package from PyPI) and a sandboxed
+  HTML/CSS/JS live preview (`srcdoc` iframe without same-origin, console
+  bridge via postMessage). AI builder runs a generate → execute → observe
+  agent loop (`src/lib/agent-loop.js`) that feeds runtime output back to the
+  model for up to three self-correction rounds.
+- **Reports app** — staged generation tuned for greedy decoding (strict JSON
+  outline → bounded per-section completions), charts emitted as JSON specs and
+  rendered by Chart.js with a model-driven "fix" loop for invalid specs, saved
+  reports, and a self-contained `.html` export with charts baked in as PNGs.
+- **PWA** — `manifest.webmanifest`, `icon.svg` and `sw.js`; the app shell and
+  CDN libraries are cached for offline use while weight downloads are
+  explicitly excluded to preserve HTTP Range streaming.
+
+### Changed
+
+- `index.html` restructured into the workstation shell; the ~900-line inline
+  script replaced by module imports. Chat markup preserved inside the chat view.
+- `landing.js` pauses the hero scene whenever a workstation route is active
+  (previously scroll-based only).
+
 ## [1.0.0] — 2026-08-11
 
 Initial release of the fork as a standalone repository.

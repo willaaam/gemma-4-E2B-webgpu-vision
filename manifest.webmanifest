@@ -1,0 +1,18 @@
+{
+  "name": "Gemma 4 Workstation",
+  "short_name": "Gemma4",
+  "description": "Fully on-device AI workstation — chat, research, code and reports powered by Gemma 4 E2B with WebGPU. No server, no API keys, nothing leaves your machine.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#020203",
+  "theme_color": "#020203",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

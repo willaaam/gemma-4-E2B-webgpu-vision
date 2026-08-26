@@ -12,7 +12,7 @@
 
 This repository is a fork of the
 [`webml-community/gemma-4-webgpu-kernels`](https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels)
-Hugging Face Space by **Xenova**, with two big additions on top of the custom
+Hugging Face Space by **Xenova**, with three big additions on top of the custom
 kernel:
 
 1. 🛡️ **NVIDIA / Windows subgroup fix** — a runtime guard that keeps generation
@@ -20,6 +20,8 @@ kernel:
    gibberish (see [NVIDIA-WINDOWS-GIBBERISH-FIX.md](NVIDIA-WINDOWS-GIBBERISH-FIX.md)).
 2. 🖼️ **Vision** — a from-scratch WebGPU/WGSL port of the Gemma 4 vision tower,
    so the model can understand images with no ONNX runtime (see [VISION.md](VISION.md)).
+3. 🧰 **Workstation** — the single chat page grew into a multi-app, fully
+  on-device AI workstation: Chat · Research · Code · Reports.
 
 ---
 
@@ -29,7 +31,7 @@ kernel:
 |---|---|
 | **Model** | [`google/gemma-4-E2B-it-qat-mobile-transformers`](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers) |
 | **Effective size** | ~2.3B params (QAT mobile, w8a8o8) |
-| **Context** | up to 128K (engine / memory dependent) |
+| **Context** | Supports up to 128K architectural context, subject to device and runtime memory limits. |
 | **Runtime** | WebGPU compute — custom WGSL kernels |
 | **Multimodal** | Text **+** images, fully on-device |
 | **Privacy** | Prompts never leave your machine |
@@ -43,6 +45,64 @@ kernel:
   into a portable butterfly (or falls back to disabling subgroups) so Windows +
   NVIDIA output stays correct.
 - **On-device only** — no telemetry, no API keys, nothing leaves the browser.
+
+---
+
+## 🧰 The Workstation
+
+One model load powers four apps (hash-routed views in a single page):
+
+| App | What it does |
+|---|---|
+| **Chat** | Streaming chat + vision, with conversation history (IndexedDB), export to `.md`, and the kernels viewer. Context cap follows the global top-bar selector. |
+| **Research** | Upload PDF / DOCX / TXT / MD / CSV / images and reason over them. Supports up to 128K architectural context, subject to device and runtime memory limits. Research automatically switches to BM25 retrieval when the effective prompt budget is exceeded. A context inspector shows exactly what the model sees. Scanned PDFs get OCR'd by the on-device vision tower with per-page progress and ETA, then export as structured Markdown with page headings and OCR markers. Global context cap is controlled from the top bar. |
+| **Code** | Agentic coding workstation: explorer + editor + harness. See *Code — Agentic IDE* below. |
+| **Reports** | Staged report generation tuned for greedy decoding: JSON outline → one bounded section at a time → charts emitted as JSON specs rendered by Chart.js (never model-written JS). Export produces a self-contained `.html` with charts baked in as PNGs — it renders offline with zero JavaScript. Global context cap from the top bar applies to each stage. |
+
+Everything is saved locally in IndexedDB (`gemma4-workstation-v1`): conversations,
+reports, parsed documents and code projects (`code-project-v3`). Nothing syncs anywhere.
+
+### Top-bar Context Control
+
+The `Context` selector in the workstation top bar (Auto / 8K / 16K / 32K / 64K / 128K) caps the **effective context window shared across Chat, Research, Code and Reports**. `Auto` lets the device use its full runtime capacity (reported in the status pill as `runtime X K / 128K`). Selecting e.g. `32K` triggers an on-device KV-cache re-allocation and the pill then shows `runtime 32K / 128K` once the allocation succeeds. Lower caps are useful to simulate smaller GPUs or to keep prompts bounded. Research shows a live inspector of what fits; Code’s agent panel shows a token estimate and respects the same budget via BM25 retrieval + history compaction.
+
+### Code — Agentic IDE
+
+A browser-native, OpenCode/Codex-inspired workspace:
+
+**Layout**
+
+- **Left — Explorer** (`280px`): collapsible tree with folders/files (create / rename / move by drag-and-drop or `⋯` menu, delete). Toolbar: `+ File`, `+ Folder`, `⬆ Zip` (upload a `.zip` — fflate-unzipped, text files merged into the virtual FS), `⬇ Zip` (download entire project), `Reset` (restores `README.md` + `main.py` + `index.html`/`style.css`/`script.js`).
+- **Center — Editor + Output**: Syntax-highlighted editor for Python / JS / HTML / CSS / JSON / Markdown, tab bar for open files, selection-aware. Bottom dock: `Output` (Pyodide stdout/stderr/plots) vs `Preview` (sandboxed iframe for Web — `allow-scripts` only, inlines `style.css`/`script.js` into `index.html`). `▶ Run` executes the active file (`.py` → Pyodide with full FS sync so `import utils.helpers` works; `.html` → Preview). Web preview auto-runs on edit (debounced).
+- **Right — Agent** (`380px`): chat transcript with thinking blocks, tool cards, and status. The harness runs up to 14 steps per turn, can call up to 3 tools per step, then finishes with an `answer`.
+
+**How the agent works**
+
+- **Harness** (`src/lib/code-harness.js`): prompt instructs the model to emit ` ```tool {"name":"...","args":{}} ``` fences. Tools are executed locally and results are fed back as observations. Reasoning is via the global `Thinking` toggle (`<|think|>`). If the prompt would exceed `effectiveContextMax`, the harness **stuffs all files** when they fit the budget, otherwise it **BM25-retrieves** the most relevant chunks — identical to Research. Long conversations are **compacted** by summarizing older turns with the model itself.
+- **Tools** (JSON):
+  - `list_files`, `read_file`, `write_file`, `edit_file` (exact old_text → new_text), `delete_file`, `mkdir`, `search` (BM25 over the codebase), `run_python` (syncs virtual FS → Pyodide, captures plots), `run_web` (renders via `WebRunner` + bridges console), `install_package` (micropip).
+- **Selection context**: highlight code in the editor → bar appears `→ Add selection`. Clicking attaches that snippet as an extra block in the next agent turn (`[User selected code from path]`), so you can scope fixes without stuffing the whole repo. Mirrors Claude Code’s selection flow.
+- **Python/Web decoupling**: the file tree is runtime-agnostic. You can mix `app.py` and `web/` in one project; runners dispatch by extension (`.py` → Pyodide, `.html/.css/.js` → iframe). `import` works across folders (`a/b.py` → `from a.b import x` via Pyodide FS).
+
+**Quick start**
+
+1. Open **Code** → Explorer shows the default project. Pick `main.py` or `index.html`.
+2. Type a request in the Agent panel, e.g. *“add a todo list with localStorage”* → `Send`.
+3. Watch tool calls stream (`read_file → write_file → run_web`). Edit manually in the editor if needed — the agent sees your edits next turn.
+4. Select a buggy block → `Add selection` → *“fix the off-by-one here”*.
+5. `⬆ Zip` to import an existing codebase, `⬇ Zip` to export, `Reset` to start fresh. All files persist in IndexedDB.
+
+### Architecture notes
+
+- One shared model instance (`src/services/model-service.js`) — a global
+  generation lock (`src/services/generation.js`) guarantees only one stream at a
+  time across all apps.
+- The generated text engine carries the runtime-capacity shim; the workstation
+  layer forwards those capabilities through the multimodal wrapper and shares
+  them with Research and generation preflight.
+- PWA: after the first visit the app shell + CDN libraries are cached by a
+  service worker (`sw.js`); weight downloads are explicitly excluded so HTTP
+  Range streaming keeps working.
 
 ---
 

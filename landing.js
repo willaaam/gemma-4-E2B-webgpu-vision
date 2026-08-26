@@ -100,15 +100,25 @@ document.addEventListener('visibilitychange', () => {
   pageVisible = !document.hidden;
   if (document.hidden) mouseInScene = false;
 });
-// Pause the WebGL background as soon as the chat view dominates the screen, so it never competes
-// with the WebGPU model for the GPU. Resume when scrolling back to the landing. Falls back to the
-// hero canvas's own visibility if there is no #chat section on the page.
+// Pause the WebGL background as soon as the workstation view is active (or the chat
+// view dominates the screen), so it never competes with the WebGPU model for the GPU.
+// Resume when scrolling back to the landing. Falls back to the hero canvas's own
+// visibility if there is no #chat section on the page.
 const chatSection = document.getElementById('chat');
 if (chatSection) {
-  new IntersectionObserver(([entry]) => { heroOnScreen = entry.intersectionRatio < 0.4; }, { threshold: [0, 0.4, 1] }).observe(chatSection);
+  new IntersectionObserver(([entry]) => {
+    // When the workstation shell is active the landing is hidden entirely — keep paused.
+    if (document.body.classList.contains('state-app')) { heroOnScreen = false; return; }
+    heroOnScreen = entry.intersectionRatio < 0.4;
+  }, { threshold: [0, 0.4, 1] }).observe(chatSection);
 } else {
   new IntersectionObserver(([entry]) => { heroOnScreen = entry.isIntersecting; }, { threshold: 0 }).observe(crtFrame);
 }
+// The workstation shell swaps views by state (not scroll) — pause whenever an app route is active.
+document.addEventListener('ws:route', (e) => {
+  const id = e.detail && e.detail.id;
+  if (id && id !== '' && id !== 'landing') heroOnScreen = false;
+});
 document.addEventListener('mousedown', () => { mousePressed = true; }, { passive: true });
 document.addEventListener('mouseup', () => { mousePressed = false; }, { passive: true });
 

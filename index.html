@@ -437,8 +437,11 @@
   .thread-scroll {
     flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
-    scroll-behavior: smooth;
+    overflow-y: scroll;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.34) rgba(255,255,255,.045);
+    scroll-behavior: auto;
   }
   .thread {
     margin: 0 auto;
@@ -720,8 +723,10 @@
   }
   .thinking-toggle input:disabled + .thinking-toggle-track { opacity: 0.4; cursor: not-allowed; }
 
-  .thread-scroll::-webkit-scrollbar { width: 10px; }
-  .thread-scroll::-webkit-scrollbar-thumb { background: var(--line); border: 3px solid var(--bg); border-radius: 10px; }
+  .thread-scroll::-webkit-scrollbar { width: 12px; background: rgba(255,255,255,.045); }
+  .thread-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.045); border-left: 1px solid var(--line-soft); }
+  .thread-scroll::-webkit-scrollbar-thumb { min-height: 32px; background: rgba(255,255,255,.34); border: 3px solid var(--bg); border-radius: 10px; }
+  .thread-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.56); }
 
   :focus-visible { outline: 1px solid rgba(255, 255, 255, 0.45); outline-offset: 3px; }
   /* The composer already shows focus via .field:focus-within — suppress the textarea's own outline. */
@@ -1029,6 +1034,419 @@
     .head-btn { padding: 8px 12px; }
   }
 </style>
+
+<style>
+  /* ====================================================================== */
+  /* WORKSTATION SHELL                                                      */
+  /* ====================================================================== */
+
+  body.state-app { overflow: hidden; }
+  body.state-app::-webkit-scrollbar { width: 0; }
+
+  /* explicit [hidden] handling — display rules below would otherwise override it */
+  #workstation[hidden] { display: none; }
+  #landing[hidden] { display: none !important; }
+  /* components inside the workstation frequently set display:flex/grid on the same
+     element that carries [hidden] (tabs, pops, panes) — make hidden win everywhere */
+  #workstation [hidden] { display: none !important; }
+
+  #workstation {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    height: 100dvh;
+  }
+
+  .ws-topbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 0 18px;
+    height: 52px;
+    flex: none;
+    border-bottom: 1px solid var(--line);
+    background: rgba(2,2,3,.92);
+    backdrop-filter: blur(8px);
+  }
+  .ws-brand {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; letter-spacing: .01em; color: var(--t1);
+    white-space: nowrap;
+  }
+  .ws-brand svg { width: 15px; height: 15px; color: var(--t3); }
+  .ws-brand .thin { color: var(--t3); }
+
+  .ws-nav { display: flex; gap: 2px; }
+  .ws-nav a {
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 13.5px;
+    color: var(--t2);
+    transition: color .15s ease, background .15s ease;
+  }
+  .ws-nav a:hover { color: var(--t1); background: var(--panel); }
+  .ws-nav a.active { color: var(--t1); background: var(--panel-hover); }
+
+  .ws-top-actions {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .ws-storage { font-size: 11.5px; color: var(--t4); white-space: nowrap; }
+
+  .ws-topbar .bar {
+    position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  }
+
+  .ws-views { flex: 1; min-height: 0; display: grid; }
+  .ws-view { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .ws-view[hidden] { display: none; }
+  .ws-app { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+
+  /* ---------- shared app chrome ---------- */
+  .ws-pane-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    flex: none;
+  }
+  .ws-pane-head h3 { font-size: 12.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); }
+  .ws-head-actions { display: flex; align-items: center; gap: 8px; }
+  .ws-context-control { display: flex; align-items: center; gap: 5px; color: var(--t3); font: 10.5px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+  .ws-context-control select {
+    color-scheme: dark;
+    color: #f2f3f5;
+    background: #111418;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 5px;
+    font: inherit;
+    text-transform: none;
+  }
+  .ws-context-control select option { color: #f2f3f5; background: #111418; }
+  .ws-context-control select:focus { outline: 1px solid rgba(100,255,160,.45); outline-offset: 1px; }
+  .ws-view-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line-soft);
+    flex: none;
+  }
+  .ws-view-title { font-size: 12.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--t3); }
+  .ws-view-actions { display: flex; gap: 8px; }
+
+  .ws-btn {
+    appearance: none; border: 1px solid var(--line); background: var(--panel);
+    color: var(--t1); border-radius: 8px; padding: 7px 14px; font-size: 13.5px;
+    cursor: pointer; transition: background .15s ease, border-color .15s ease, opacity .15s ease;
+  }
+  .ws-btn:hover:not(:disabled) { background: var(--panel-hover); }
+  .ws-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .ws-btn.primary { background: rgba(100,255,160,.14); border-color: rgba(100,255,160,.35); color: var(--ok); }
+  .ws-btn.primary:hover:not(:disabled) { background: rgba(100,255,160,.22); }
+  .ws-btn.danger { border-color: rgba(255,122,107,.4); color: var(--danger); }
+  .ws-btn.ghost { background: transparent; }
+  .ws-btn.small { padding: 5px 10px; font-size: 12.5px; border-radius: 7px; }
+  .ws-btn.tiny { padding: 2px 8px; font-size: 11.5px; border-radius: 6px; }
+
+  .ws-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ws-chip {
+    border: 1px solid var(--line); background: var(--panel); color: var(--t2);
+    padding: 5px 11px; border-radius: 999px; font-size: 12.5px; cursor: pointer;
+    transition: all .15s ease;
+  }
+  .ws-chip:hover:not(:disabled) { color: var(--t1); border-color: rgba(255,255,255,.18); }
+  .ws-chip.active { color: var(--ok); border-color: rgba(100,255,160,.4); background: rgba(100,255,160,.08); }
+  .ws-chip.small { padding: 3px 9px; font-size: 11.5px; }
+
+  .ws-label { display: block; font-size: 12px; color: var(--t3); margin: 14px 0 6px; }
+  .ws-label .ws-opt { color: var(--t4); }
+  .ws-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .ws-file-name { font-size: 12px; color: var(--t3); }
+  .mono { font-family: var(--mono); }
+
+  .ws-empty { color: var(--t3); font-size: 13.5px; text-align: center; padding: 28px 16px; line-height: 1.7; }
+  .ws-empty.small { padding: 18px 12px; font-size: 12.5px; }
+
+  .ws-badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    font-size: 11px; letter-spacing: .04em;
+    background: rgba(100,255,160,.1); color: var(--ok); border: 1px solid rgba(100,255,160,.25);
+  }
+
+  /* ---------- split / tri layouts ---------- */
+  .ws-split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(320px, 420px) 1fr; }
+  .ws-tri { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 300px) 1fr minmax(220px, 280px); }
+  .ws-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .ws-pane + .ws-pane { border-left: 1px solid var(--line-soft); }
+  .ws-pane-left { background: rgba(255,255,255,.012); }
+
+  /* ---------- chat view ---------- */
+  .view-chat { position: relative; }
+  .view-chat .thread-scroll {
+    flex: 1;
+    width: 100%;
+    max-width: calc(var(--maxw) + 44px);
+    margin-inline: auto;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: rgba(100,255,160,.72) rgba(255,255,255,.10);
+  }
+  .view-chat .thread-scroll::-webkit-scrollbar { width: 14px; background: rgba(255,255,255,.10); }
+  .view-chat .thread-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,.10); border-left: 1px solid var(--line-soft); }
+  .view-chat .thread-scroll::-webkit-scrollbar-thumb { min-height: 32px; background: rgba(100,255,160,.72); border: 2px solid var(--bg); border-radius: 10px; }
+  .view-chat .thread-scroll::-webkit-scrollbar-thumb:hover { background: rgba(100,255,160,.92); }
+  .view-chat .composer-wrap { flex: none; }
+
+  .ws-drawer {
+    position: absolute; top: 10px; right: 12px; bottom: 10px; width: min(320px, 80%);
+    background: #0a0b0e; border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.55);
+    display: flex; flex-direction: column; z-index: 30; overflow: hidden;
+  }
+  .ws-drawer[hidden] { display: none; }
+  .ws-drawer-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-bottom: 1px solid var(--line-soft);
+  }
+  .ws-drawer-head h3 { font-size: 13px; font-weight: 500; }
+  .ws-drawer-body { flex: 1; overflow-y: auto; padding: 6px; }
+  .ws-drawer-foot { padding: 10px 14px; font-size: 11.5px; color: var(--t4); border-top: 1px solid var(--line-soft); }
+
+  .ws-hist-row {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 8px 10px; border-radius: 9px; cursor: pointer;
+    color: var(--t2); font-size: 13px; text-align: left;
+    border: 0; background: none;
+  }
+  .ws-hist-row:hover { background: var(--panel-hover); color: var(--t1); }
+  .ws-hist-row.active { background: rgba(100,255,160,.07); color: var(--t1); }
+  .ws-hist-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-hist-date { font-size: 11px; color: var(--t4); flex: none; }
+  .ws-hist-del {
+    flex: none; width: 20px; height: 20px; line-height: 18px; text-align: center;
+    border-radius: 6px; color: var(--t4); cursor: pointer; background: none; border: 0; font-size: 14px;
+  }
+  .ws-hist-del:hover { color: var(--danger); background: rgba(255,122,107,.1); }
+
+  /* ---------- reports ---------- */
+  .reports-app .ws-form { padding: 4px 14px 16px; overflow-y: auto; flex: 1; }
+  .reports-app textarea {
+    width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--t1); padding: 10px 12px; font-size: 13.5px; resize: vertical;
+  }
+  .reports-app textarea:focus { outline: none; border-color: rgba(100,255,160,.35); }
+  .reports-app .ws-form > .ws-btn.primary { width: 100%; margin-top: 16px; padding: 10px; }
+  .reports-app .ws-form > .ws-btn.danger { width: 100%; margin-top: 8px; }
+  .ws-log { margin-top: 12px; font-size: 11.5px; color: var(--t3); max-height: 180px; overflow-y: auto; line-height: 1.7; }
+
+  .ws-preview { flex: 1; overflow-y: auto; padding: 26px 34px; }
+  .ws-report { max-width: 760px; margin: 0 auto; font-size: 15px; line-height: 1.75; }
+  .ws-report h1 { font-family: var(--display); font-weight: 400; font-size: 2rem; margin-bottom: .2em; }
+  .ws-report h2 { margin-top: 1.8em; padding-bottom: .25em; border-bottom: 1px solid var(--line-soft); font-weight: 500; }
+  .ws-report h3 { margin-top: 1.4em; font-weight: 500; }
+  .ws-report table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+  .ws-report th, .ws-report td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  .ws-report th { background: var(--panel); }
+  .ws-report blockquote { border-left: 3px solid var(--line); margin-left: 0; padding-left: 1em; color: var(--t2); }
+  .ws-source { flex: 1; overflow: auto; padding: 18px; font-size: 12.5px; color: var(--t2); white-space: pre-wrap; }
+
+  .ws-chart-holder { margin: 1.4em 0; }
+  .ws-chart-title { font-size: 13px; color: var(--t2); margin-bottom: 8px; text-align: center; }
+  .ws-chart-canvas { position: relative; height: 300px; background: rgba(255,255,255,.02); border: 1px solid var(--line-soft); border-radius: 12px; padding: 12px; }
+  .ws-chart-error { border: 1px solid rgba(255,205,107,.35); background: rgba(255,205,107,.06); border-radius: 12px; padding: 14px; font-size: 13px; color: var(--warn); }
+  .ws-chart-error pre { font-size: 11px; color: var(--t3); max-height: 120px; overflow: auto; margin: 8px 0; }
+  .ws-export-chart img { max-width: 100%; }
+
+  .ws-saved-pop {
+    position: absolute; top: 46px; right: 12px; z-index: 40;
+    width: min(340px, 90%);
+    background: #0a0b0e; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 6px; max-height: 320px; overflow-y: auto;
+  }
+  .ws-pane-left { position: relative; }
+
+  /* ---------- research ---------- */
+  .research-app .ws-lib { flex: 1; overflow-y: auto; padding: 10px; }
+  .research-app .ws-pane-left.dragging { outline: 2px dashed rgba(100,255,160,.5); outline-offset: -6px; background: rgba(100,255,160,.04); }
+  .ws-lib-status {
+    flex: none; padding: 7px 12px; font-size: 11.5px; color: var(--t2);
+    border-bottom: 1px solid var(--line-soft); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .ws-lib-status.busy { color: var(--warn); }
+  .ws-lib-status.busy::before {
+    content: "";
+    display: inline-block; width: 9px; height: 9px;
+    margin-right: 7px; vertical-align: -1px;
+    border: 2px solid rgba(255,205,107,.3); border-top-color: var(--warn);
+    border-radius: 50%;
+    animation: ws-spin .8s linear infinite;
+  }
+  @keyframes ws-spin { to { transform: rotate(360deg); } }
+
+  /* research generation phase indicator inside the assistant bubble */
+  .ws-gen-stat { font-size: 11px; color: var(--t4); margin-top: 8px; }
+  .ws-doc-card {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 11px;
+    margin-bottom: 8px; cursor: pointer; transition: border-color .15s ease, background .15s ease;
+  }
+  .ws-doc-card:hover { background: var(--panel); }
+  .ws-doc-card.selected { border-color: rgba(100,255,160,.35); background: rgba(100,255,160,.05); }
+  .ws-doc-card input[type="checkbox"] { accent-color: var(--ok); flex: none; }
+  .ws-doc-meta { flex: 1; min-width: 0; }
+  .ws-doc-name { font-size: 13px; color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-doc-sub { font-size: 11px; color: var(--t4); margin-top: 2px; }
+  .ws-doc-ops { display: flex; gap: 6px; flex: none; }
+  .ws-lib-foot { flex: none; padding: 8px 12px; border-top: 1px solid var(--line-soft); font-size: 11px; color: var(--t4); }
+
+  .research-app .ws-thread-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px; }
+  .research-app .ws-thread { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  .ws-actions-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 22px; flex: none; }
+  .ws-composer { display: flex; gap: 8px; padding: 10px 22px 14px; flex: none; align-items: flex-end; }
+  .ws-composer textarea {
+    flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    color: var(--t1); padding: 10px 14px; font-size: 14px; resize: none; max-height: 140px;
+  }
+  .ws-composer textarea:focus { outline: none; border-color: rgba(100,255,160,.35); }
+  .ws-composer .ws-btn { flex: none; padding: 10px 18px; }
+
+  .ws-inspector { flex: 1; overflow-y: auto; padding: 12px; }
+  .ws-insp-head { font-size: 12px; color: var(--t3); margin-bottom: 10px; }
+  .ws-insp-block { border: 1px solid var(--line-soft); border-radius: 10px; margin-bottom: 8px; font-size: 12.5px; }
+  .ws-insp-block summary { padding: 8px 10px; cursor: pointer; color: var(--t2); list-style-position: inside; }
+  .ws-insp-prov { padding: 0 10px 6px; font-size: 11px; color: var(--t4); }
+  .ws-insp-block pre { margin: 0; padding: 8px 10px; font-size: 10.5px; color: var(--t3); max-height: 200px; overflow: auto; border-top: 1px solid var(--line-soft); white-space: pre-wrap; }
+
+  /* ---------- code ---------- */
+  .code-app .ws-thread-scroll { flex: 1; overflow-y: auto; padding: 16px 18px; }
+  .code-app .ws-thread { display: flex; flex-direction: column; gap: 12px; }
+  .code-app .ws-thread .bubble { font-size: 13px; }
+  .code-app .ws-thread pre { font-size: 11px; max-height: 260px; overflow: auto; }
+
+  .ws-tabs { display: flex; gap: 2px; }
+  .ws-tab {
+    border: 0; background: none; color: var(--t3); font-size: 13px;
+    padding: 6px 12px; border-radius: 8px; cursor: pointer;
+  }
+  .ws-tab:hover { color: var(--t1); }
+  .ws-tab.active { color: var(--t1); background: var(--panel-hover); }
+  .ws-tab.small { font-size: 12px; padding: 4px 10px; }
+
+  .ws-editor-tabs { display: flex; gap: 2px; padding: 6px 10px 0; flex: none; flex-wrap: wrap; min-height: 34px; }
+  .ws-editor {
+    flex: 1; min-height: 140px; width: 100%;
+    background: rgba(255,255,255,.02); color: var(--t1);
+    border: 0; border-bottom: 1px solid var(--line-soft);
+    padding: 14px 18px; font-size: 13px; line-height: 1.65;
+    resize: none; tab-size: 2;
+  }
+  .ws-editor:focus { outline: none; }
+
+  .ws-out { flex: none; height: 38%; min-height: 160px; display: flex; flex-direction: column; }
+  .ws-out-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); flex: none; }
+  .ws-console { flex: 1; overflow: auto; margin: 0; padding: 10px 14px; font-size: 12px; line-height: 1.7; color: var(--t2); }
+  .ws-console-line.error { color: var(--danger); }
+  .ws-console-line.warn { color: var(--warn); }
+  .ws-console-line.info { color: var(--t4); }
+  .ws-plot { max-width: 100%; border-radius: 8px; margin: 8px 0; border: 1px solid var(--line-soft); }
+  .ws-preview-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+  .ws-pkg-input {
+    width: 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+    color: var(--t1); padding: 5px 9px; font-size: 12px;
+  }
+  .ws-pkg-input:focus { outline: none; border-color: rgba(100,255,160,.35); }
+  .ws-toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--t3); cursor: pointer; }
+  .ws-toggle input { accent-color: var(--ok); }
+  .ws-top-toggle { color: var(--t2); padding: 4px 8px; border-radius: 7px; }
+  .ws-top-toggle:hover { background: var(--panel); }
+
+  /* code app: 3-pane layout + explorer + codemirror + harness */
+  .ws-code-app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .ws-code-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 380px; }
+  .ws-code-explorer-pane { border-right: 1px solid var(--line-soft); overflow: hidden; display: flex; flex-direction: column; }
+  .ws-code-center { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line-soft); }
+  .ws-code-agent { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,.01); }
+  .ws-code-editor-wrap { flex: 1; min-height: 220px; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--line-soft); }
+  .ws-code-editor-host { flex: 1; min-height: 0; overflow: auto; position: relative; }
+  .ws-code-editor-host .cm-editor { height: 100%; }
+  .ws-code-editor-host .cm-scroller { overflow: auto !important; }
+  /* explorer tree */
+  .ws-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .ws-explorer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line-soft); flex: none; flex-wrap: wrap; }
+  .ws-explorer-btns { display: flex; gap: 4px; flex-wrap: wrap; }
+  .ws-explorer-info { padding: 6px 10px; font-size: 10.5px; color: var(--t4); border-bottom: 1px solid var(--line-soft); flex: none; }
+  .ws-explorer-tree { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .ws-explorer-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font-size: 12.5px; color: var(--t2); cursor: pointer; border-radius: 6px; margin: 1px 6px; transition: background .12s, color .12s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-explorer-row:hover { background: var(--panel); color: var(--t1); }
+  .ws-explorer-row.selected { background: rgba(100,255,160,.08); color: var(--t1); border: 1px solid rgba(100,255,160,.18); }
+  .ws-explorer-row.dragging { opacity: .45; }
+  .ws-explorer-row.drag-over { background: rgba(100,255,160,.12); outline: 1px dashed rgba(100,255,160,.5); }
+  .ws-explorer-twist { width: 10px; text-align: center; font-size: 10px; color: var(--t4); flex: none; }
+  .ws-explorer-icon { flex: none; font-size: 12px; }
+  .ws-explorer-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .ws-explorer-more { flex: none; width: 20px; height: 20px; border-radius: 6px; color: var(--t4); font-size: 14px; display: grid; place-items: center; opacity: 0; }
+  .ws-explorer-row:hover .ws-explorer-more { opacity: 1; }
+  .ws-explorer-more:hover { background: var(--panel-hover); color: var(--t1); }
+  /* agent pane */
+  .ws-code-agent .ws-thread-scroll { flex: 1; min-height: 0; }
+  .ws-code-agent .ws-thread { padding: 14px 14px 10px; gap: 14px; }
+  .ws-agent-selection { border-top: 1px solid var(--line-soft); padding: 8px 10px; background: rgba(100,255,160,.04); flex: none; }
+  .ws-agent-selection.pending { background: rgba(100,255,160,.08); border-top-color: rgba(100,255,160,.25); }
+  .ws-selection-chip { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--t2); }
+  .ws-selection-chip span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-selection-preview { margin: 6px 0 0; padding: 8px; background: #080a0c; border: 1px solid var(--line-soft); border-radius: 8px; font-size: 11px; color: var(--t3); max-height: 90px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .ws-agent-context { padding: 6px 10px; font-size: 10px; color: var(--t4); border-top: 1px solid var(--line-soft); flex: none; text-align: center; }
+  .ws-agent-status { padding: 6px 10px; font-size: 11px; color: var(--t3); min-height: 18px; border-top: 1px solid var(--line-soft); }
+  .ws-tool-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 6px 0; background: #0a0b0e; }
+  .ws-tool-card.ok { border-color: rgba(100,255,160,.25); }
+  .ws-tool-card.err { border-color: rgba(255,122,107,.35); }
+  .ws-tool-head { padding: 6px 10px; font-size: 11px; background: var(--panel); border-bottom: 1px solid var(--line-soft); }
+  .ws-tool-args, .ws-tool-out { margin: 0; padding: 8px 10px; font-size: 11px; color: var(--t3); max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .ws-tool-out { border-top: 1px solid var(--line-soft); background: rgba(255,255,255,.02); }
+  .ws-tool-pending { font-size: 11px; color: var(--t3); padding: 4px 0; }
+  .ws-code-agent .ws-composer { flex-wrap: nowrap; padding: 10px; }
+  .ws-code-agent .ws-composer textarea { min-height: 44px; }
+  .ws-tab-del { margin-left: 6px; color: var(--t4); cursor: pointer; padding: 1px 4px; border-radius: 4px; }
+  .ws-tab-del:hover { color: var(--danger); background: rgba(255,122,107,.12); }
+  .ws-tab-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* code app: AI action row, popovers, dynamic tabs */
+  .ws-ai-actions { display: flex; gap: 6px; padding: 6px 14px; flex-wrap: wrap; border-top: 1px solid var(--line-soft); }
+  .ws-pop {
+    position: absolute; top: 46px; right: 12px; z-index: 40;
+    width: min(320px, 80%);
+    background: #0a0b0e; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 6px;
+    max-height: 340px; overflow-y: auto;
+  }
+  .ws-pop-head { font-size: 11.5px; color: var(--t4); padding: 6px 10px 4px; }
+  .ws-newfile-row { display: flex; gap: 6px; padding: 4px 8px 8px; }
+  .ws-newfile-row input { flex: 1; }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 900px) {
+    .ws-tri { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; overflow-y: auto; }
+    .research-app .ws-lib { max-height: 200px; }
+    .research-app .ws-pane-right { display: none; }
+    .ws-split { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+    .reports-app .ws-split { grid-template-rows: auto 1fr; }
+    .ws-nav a { padding: 6px 8px; font-size: 12.5px; }
+    .ws-storage { display: none; }
+    .ws-code-layout { grid-template-columns: 1fr; grid-template-rows: 260px 1fr 360px; overflow-y: auto; }
+    .ws-code-explorer-pane { max-height: 260px; }
+    .ws-code-center { min-height: 420px; }
+    .ws-code-agent { min-height: 360px; }
+    #globalContextLimit { max-width: 88px; }
+  }
+</style>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <meta name="theme-color" content="#020203">
+    <link rel="icon" type="image/svg+xml" href="./icon.svg">
 </head>
 <body>
 
@@ -1050,7 +1468,7 @@
             </p>
             <div class="hero-stats">
               <div class="stat"><span class="stat-val">2.3B</span><span class="stat-label">Effective params</span></div>
-              <div class="stat"><span class="stat-val">128K</span><span class="stat-label">Context window</span></div>
+              <div class="stat"><span class="stat-val">128K</span><span class="stat-label">Architectural context max</span></div>
               <div class="stat"><span class="stat-val">~250</span><span class="stat-label">tok/s · M4&nbsp;Max</span></div>
               <div class="stat"><span class="stat-val">100%</span><span class="stat-label">On-device</span></div>
             </div>
@@ -1058,7 +1476,7 @@
           <div class="hero-side">
             <div class="hero-actions">
               <button class="btn-primary" id="loadBtn" type="button">
-                <span id="loadBtnLabel">Load model</span>
+                <span id="loadBtnLabel">Launch workstation</span>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v9M4 7l4 4 4-4"/></svg>
               </button>
               <a class="btn-secondary" href="https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers" target="_blank" rel="noopener">Model card</a>
@@ -1073,75 +1491,117 @@
       </div>
 
       <div class="scroll-cue" id="scrollCue">
-        <span>Chat below</span>
+        <span>Chat · Research · Code · Reports</span>
         <div class="scroll-cue-line"></div>
       </div>
     </div>
   </section>
 
-  <!-- ======================= CHAT ======================= -->
-  <section id="chat" class="screen">
-    <header class="chat-head">
-      <div class="chat-head-inner">
-        <a class="to-top" href="#landing" id="toTop" title="Back to top">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V4M4 8l4-4 4 4"/></svg>
-          <span class="brand-name">Gemma 4 · E2B</span>
-        </a>
+  <!-- ======================= WORKSTATION ======================= -->
+  <div id="workstation" hidden>
+    <header class="ws-topbar">
+      <a class="ws-brand" href="#/" id="brandLink" title="Back to start">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 13V4M4 8l4-4 4 4"/></svg>
+        <span class="brand-name">Gemma 4 · <span class="thin">Workstation</span></span>
+      </a>
+      <nav class="ws-nav" id="wsNav">
+        <a href="#/chat" data-route="chat">Chat</a>
+        <a href="#/research" data-route="research">Research</a>
+        <a href="#/code" data-route="code">Code</a>
+        <a href="#/reports" data-route="reports">Reports</a>
+      </nav>
+      <div class="ws-top-actions">
+        <label class="ws-context-control mono" title="Context window cap — shared across Chat, Research, Code & Reports (Auto = device maximum)">
+          Context
+          <select id="globalContextLimit" aria-label="Global context limit">
+            <option value="auto">Auto</option>
+            <option value="8192">8K</option>
+            <option value="16384">16K</option>
+            <option value="32768">32K</option>
+            <option value="65536">64K</option>
+            <option value="131072">128K</option>
+          </select>
+        </label>
+        <span class="ws-storage mono" id="storageMeter" title="Local storage used by cached weights and your saved work — nothing is uploaded"></span>
+        <label class="ws-toggle ws-top-toggle" for="thinkCheck" title="Reasoning mode — lets the model think step-by-step before answering, in every app">
+          <input type="checkbox" id="thinkCheck" checked>
+          <span>Thinking</span>
+        </label>
         <div class="status" id="status">
           <span class="status-dot"></span>
           <span class="status-text" id="statusText">Not loaded</span>
         </div>
-        <div class="chat-head-actions">
-          <button class="head-btn solid" id="headLoadBtn" type="button">Load model</button>
-          <button class="head-btn" id="kernelsBtn" type="button" hidden>View Kernels</button>
-          <button class="head-btn" id="clearBtn" type="button" disabled>Clear</button>
-        </div>
+        <button class="head-btn solid" id="headLoadBtn" type="button">Load model</button>
       </div>
       <div class="bar" id="bar"><div></div></div>
     </header>
 
-    <div class="thread-scroll" id="threadScroll">
-      <div class="thread" id="thread">
-        <div class="welcome" id="welcome">
-          <h2>What's on your <span class="thin">mind today?</span></h2>
-          <p>Model runs entirely on your device.</p>
-          <div class="seeds">
-            <button class="seed" type="button" disabled>How does WebGPU differ from WebGL?</button>
-            <button class="seed" type="button" disabled>Write a haiku about on-device AI</button>
-            <button class="seed" type="button" disabled>What is quantization-aware training?</button>
+    <main class="ws-views">
+      <!-- CHAT -->
+      <section id="view-chat" class="ws-view view-chat">
+        <header class="ws-view-head">
+          <div class="ws-view-title">Chat</div>
+          <div class="ws-view-actions">
+            <button class="head-btn" id="historyBtn" type="button">History</button>
+            <button class="head-btn" id="exportBtn" type="button">Export .md</button>
+            <button class="head-btn" id="clearBtn" type="button" disabled>Clear</button>
+            <button class="head-btn" id="kernelsBtn" type="button" hidden>View Kernels</button>
+          </div>
+        </header>
+
+        <div class="thread-scroll" id="threadScroll">
+          <div class="thread" id="thread">
+            <div class="welcome" id="welcome">
+              <h2>What's on your <span class="thin">mind today?</span></h2>
+              <p>Model runs entirely on your device.</p>
+              <div class="seeds">
+                <button class="seed" type="button" disabled>How does WebGPU differ from WebGL?</button>
+                <button class="seed" type="button" disabled>Write a haiku about on-device AI</button>
+                <button class="seed" type="button" disabled>What is quantization-aware training?</button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <footer class="composer-wrap">
-      <div class="composer">
-        <div class="field">
-          <textarea id="input" rows="1" placeholder="Load the model to start chatting..." disabled></textarea>
-          <button class="icon-button attach-button" id="attachBtn" type="button" disabled aria-label="Attach an image">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-          </button>
-          <input type="file" id="imageInput" accept="image/*" hidden>
-          <button class="icon-button send-button" id="sendBtn" type="button" disabled aria-label="Send message">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-          </button>
-          <button class="icon-button stop-button" id="stopBtn" type="button" aria-label="Stop generation">
-            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
-          </button>
-        </div>
-        <div class="composer-meta">
-          <div class="attachments" id="attachments" hidden></div>
-          <label class="thinking-toggle" id="thinkingToggle" title="Let the model reason step-by-step before answering">
-            <input type="checkbox" id="thinkingCheck">
-            <span class="thinking-toggle-track"><span class="thinking-toggle-thumb"></span></span>
-            <span class="thinking-toggle-label">Thinking</span>
-          </label>
-          <span id="hint">Runs fully on-device — nothing leaves your machine</span>
-          <span id="liveStat"></span>
-        </div>
-      </div>
-    </footer>
-  </section>
+        <footer class="composer-wrap">
+          <div class="composer">
+            <div class="field">
+              <textarea id="input" rows="1" placeholder="Load the model to start chatting..." disabled></textarea>
+              <button class="icon-button attach-button" id="attachBtn" type="button" disabled aria-label="Attach an image">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+              </button>
+              <input type="file" id="imageInput" accept="image/*" hidden>
+              <button class="icon-button send-button" id="sendBtn" type="button" disabled aria-label="Send message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+              </button>
+              <button class="icon-button stop-button" id="stopBtn" type="button" aria-label="Stop generation">
+                <svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+              </button>
+            </div>
+            <div class="composer-meta">
+              <div class="attachments" id="attachments" hidden></div>
+              <span id="hint">Runs fully on-device — nothing leaves your machine</span>
+              <span id="liveStat"></span>
+            </div>
+          </div>
+        </footer>
+
+        <aside class="ws-drawer" id="historyDrawer" hidden>
+          <div class="ws-drawer-head">
+            <h3>Conversations</h3>
+            <button class="ws-hist-del" id="historyClose" type="button" aria-label="Close history">×</button>
+          </div>
+          <div class="ws-drawer-body" id="historyList"></div>
+          <div class="ws-drawer-foot">Saved locally in your browser only.</div>
+        </aside>
+      </section>
+
+      <!-- other apps mount here -->
+      <section id="view-research" class="ws-view" hidden></section>
+      <section id="view-code" class="ws-view" hidden></section>
+      <section id="view-reports" class="ws-view" hidden></section>
+    </main>
+  </div>
 
   <!-- ============ KERNELS OVERLAY ============ -->
   <div class="kx" id="kernelsOverlay" hidden>
@@ -1164,7 +1624,7 @@
               <div class="kx-spark" aria-hidden="true">
                 <span class="kx-spark-ring"></span>
                 <span class="kx-spark-core"></span>
-                <svg class="kx-spark-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M11.7858 1.66699C11.9437 1.66699 12.0957 1.72951 12.2074 1.84115C12.3189 1.95276 12.3815 2.10483 12.3815 2.2627V3.45247H15.3568C15.6725 3.45247 15.9767 3.57757 16.1999 3.80078C16.4231 4.02403 16.5482 4.32813 16.5482 4.64388V7.61914H17.738C17.8957 7.61914 18.0479 7.68181 18.1595 7.79329C18.2712 7.90491 18.3337 8.05698 18.3337 8.21484C18.3336 8.37247 18.2709 8.52323 18.1595 8.63477C18.0478 8.7464 17.8958 8.81055 17.738 8.81055H16.5482V11.1901H17.738C17.8958 11.1901 18.0478 11.2543 18.1595 11.3659C18.2709 11.4774 18.3336 11.6282 18.3337 11.7858C18.3337 11.9437 18.2712 12.0957 18.1595 12.2074C18.0479 12.3188 17.8957 12.3815 17.738 12.3815H16.5482V15.3568C16.5482 15.6725 16.4231 15.9767 16.1999 16.1999C15.9767 16.4231 15.6725 16.5482 15.3568 16.5482H12.3815V17.738C12.3815 17.8959 12.3188 18.0479 12.2074 18.1595C12.0957 18.271 11.9437 18.3337 11.7858 18.3337C11.6282 18.3336 11.4774 18.2707 11.3659 18.1595C11.2543 18.0478 11.1901 17.896 11.1901 17.738V16.5482H8.81055V17.738C8.81055 17.896 8.7464 18.0478 8.63477 18.1595C8.52323 18.2707 8.37247 18.3336 8.21484 18.3337C8.05698 18.3337 7.90491 18.271 7.79329 18.1595C7.68181 18.0479 7.61914 17.8958 7.61914 17.738V16.5482H4.64388C4.32813 16.5482 4.02403 16.4231 3.80078 16.1999C3.57756 15.9767 3.45247 15.6725 3.45247 15.3568V12.3815H2.2627C2.10485 12.3815 1.95276 12.3189 1.84115 12.2074C1.72951 12.0957 1.66699 11.9437 1.66699 11.7858C1.66708 11.6283 1.72987 11.4774 1.84115 11.3659C1.95276 11.2543 2.10483 11.1901 2.2627 11.1901H3.45247V8.81055H2.2627C2.10483 8.81055 1.95276 8.7464 1.84115 8.63477C1.72987 8.52324 1.66704 8.37243 1.66699 8.21484C1.66699 8.05698 1.72951 7.90491 1.84115 7.79329C1.95275 7.68175 2.1049 7.61914 2.2627 7.61914H3.45247V4.64388C3.45247 4.32813 3.57751 4.02403 3.80078 3.80078C4.02403 3.57753 4.32813 3.45247 4.64388 3.45247H7.61914V2.2627C7.61914 2.10488 7.68175 1.95275 7.79329 1.84115C7.90491 1.72951 8.05698 1.66699 8.21484 1.66699C8.37243 1.66704 8.52324 1.72987 8.63477 1.84115C8.7464 1.95276 8.81055 2.10481 8.81055 2.2627V3.45247H11.1901V2.2627C11.1901 2.10481 11.2543 1.95276 11.3659 1.84115C11.4774 1.72987 11.6283 1.66708 11.7858 1.66699ZM6.14616 5.31445C5.6863 5.31489 5.31445 5.68782 5.31445 6.14779V13.8529C5.31445 14.3131 5.68755 14.6862 6.14779 14.6862H13.8529C14.3131 14.6862 14.6862 14.3131 14.6862 13.8529V6.14779C14.6862 5.68755 14.3131 5.31445 13.8529 5.31445H6.14616Z" fill-opacity="0.4"></path><rect x="5.31348" y="5.31445" width="9.37256" height="9.37256" rx="0.833333" fill-opacity="0.15"></rect><path d="M8.19238 7.91225V12.254C8.19238 12.585 8.55699 12.7862 8.83777 12.606L12.2491 10.4351C12.3088 10.3973 12.358 10.3451 12.3921 10.2831C12.4262 10.2212 12.4441 10.1517 12.4441 10.081C12.4441 10.0103 12.4262 9.9408 12.3921 9.87889C12.358 9.81697 12.3088 9.76468 12.2491 9.72688L8.83777 7.56022C8.77456 7.51934 8.70149 7.49627 8.62626 7.49346C8.55103 7.49064 8.47644 7.50819 8.41035 7.54423C8.34426 7.58028 8.28913 7.6335 8.25077 7.69827C8.2124 7.76304 8.19223 7.83697 8.19238 7.91225Z" fill-opacity="0.8"></path></svg>
+                <svg class="kx-spark-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M11.7858 1.66699C11.9437 1.66699 12.0957 1.72951 12.2074 1.84115C12.3189 1.95276 12.3815 2.10483 12.3815 2.2627V3.45247H15.3568C15.6725 3.45247 15.9767 3.57757 16.1999 3.80078C16.4231 4.02403 16.5482 4.32813 16.5482 4.64388V7.61914H17.738C17.8957 7.61914 18.0479 7.68181 18.1595 7.79329C18.2712 7.90491 18.3337 8.05698 18.3337 8.21484C18.3336 8.37247 18.2709 8.52323 18.1595 8.63477C18.0478 8.7464 17.8958 8.81055 17.738 8.81055H16.5482V11.1901H17.738C17.8958 11.1901 18.0478 11.2543 18.1595 11.3659C18.2709 11.4774 18.3336 11.6282 18.3337 11.7858C18.3337 11.9437 18.2712 12.0957 18.1595 12.2074C18.0479 12.3188 17.8957 12.3815 17.738 12.3815H16.5482V15.3568C16.5482 15.6725 16.4231 15.9767 16.1999 16.1999C15.9767 16.4231 15.6725 16.5482 15.3568 16.5482H12.3815V17.738C12.3815 17.8959 12.3188 18.0479 12.2074 18.1595C12.0957 18.271 11.9437 18.3337 11.7858 18.3337C11.6282 18.3336 11.4774 18.2707 11.3659 18.1595C11.2543 18.0478 11.1901 17.896 11.1901 17.738V16.5482H8.81055V17.738C8.81055 17.896 8.7464 18.0478 8.63477 18.1595C8.52323 18.2707 8.37247 18.3336 8.21484 18.3337C8.05698 18.3337 7.90491 18.271 7.79329 18.1595C7.68181 18.0479 7.61914 17.8958 7.61914 17.738V16.5482H4.64388C4.32813 16.5482 4.02403 16.4231 3.80078 16.1999C3.57756 15.9767 3.45247 15.6725 3.45247 15.3568V12.3815H2.2627C2.10485 12.3815 1.95276 12.3189 1.84115 12.2074C1.72951 12.0957 1.66699 11.9437 1.66699 11.7858C1.66708 11.6283 1.72987 11.4774 1.84115 11.3659C1.95276 11.2543 2.1049 11.1901 2.2627 11.1901H3.45247V8.81055H2.2627C2.10483 8.81055 1.95276 8.7464 1.84115 8.63477C1.72987 8.52324 1.66704 8.37243 1.66699 8.21484C1.66699 8.05698 1.72951 7.90491 1.84115 7.79329C1.95275 7.68175 2.1049 7.61914 2.2627 7.61914H3.45247V4.64388C3.45247 4.32813 3.57751 4.02403 3.80078 3.80078C4.02403 3.57753 4.32813 3.45247 4.64388 3.45247H7.61914V2.2627C7.61914 2.10488 7.68175 1.95275 7.79329 1.84115C7.90491 1.72951 8.05698 1.66699 8.21484 1.66699C8.37243 1.66704 8.52324 1.72987 8.63477 1.84115C8.7464 1.95276 8.81055 2.10481 8.81055 2.2627V3.45247H11.1901V2.2627C11.1901 2.10481 11.2543 1.95276 11.3659 1.84115C11.4774 1.72987 11.6283 1.66708 11.7858 1.66699ZM6.14616 5.31445C5.6863 5.31489 5.31445 5.68782 5.31445 6.14779V13.8529C5.31445 14.3131 5.68755 14.6862 6.14779 14.6862H13.8529C14.3131 14.6862 14.6862 14.3131 14.6862 13.8529V6.14779C14.6862 5.68755 14.3131 5.31445 13.8529 5.31445H6.14616Z" fill-opacity="0.4"></path><rect x="5.31348" y="5.31445" width="9.37256" height="9.37256" rx="0.833333" fill-opacity="0.15"></rect><path d="M8.19238 7.91225V12.254C8.19238 12.585 8.55699 12.7862 8.83777 12.606L12.2491 10.4351C12.3088 10.3973 12.358 10.3451 12.3921 10.2831C12.4262 10.2212 12.4441 10.1517 12.4441 10.081C12.4441 10.0103 12.4262 9.9408 12.3921 9.87889C12.358 9.81697 12.3088 9.76468 12.2491 9.72688L8.83777 7.56022C8.77456 7.51934 8.70149 7.49627 8.62626 7.49346C8.55103 7.49064 8.47644 7.50819 8.41035 7.54423C8.34426 7.58028 8.28913 7.6335 8.25077 7.69827C8.2124 7.76304 8.19223 7.83697 8.19238 7.91225Z" fill-opacity="0.8"></path></svg>
               </div>
               <h2 class="kx-intro-title">What are Kernels?</h2>
               <p class="kx-intro-lead">Kernels are the low-level GPU programs that do the model's actual math — the matrix multiplications, attention, and normalization behind every token. And how well they're optimized can dramatically speed up inference.</p>
@@ -1209,38 +1669,21 @@
     })();
   </script>
 
-  <!-- app logic -->
+  <!-- app logic: workstation shell bootstrap -->
   <script type="module">
-    import { Gemma4Mobile } from "./gemma-4-e2b.js";
-    import { gemma4SgGuard } from "./gemma4-sg-guard.js";
-    import { Gemma4Vision } from "./gemma4-vision.js";
-    import { VisionGemma4Mobile, installVisionHook } from "./gemma4-vision-inject.js";
-    import { MODEL_CONFIG } from "./src/model-config.js";
-
-    const LOCAL_MODEL_URL = MODEL_CONFIG.mobileGemma.path;
-    const VISION_WEIGHTS_URL = new URL("model.safetensors", MODEL_CONFIG.mobileGemma.path).href;
-
-    // Streamed markdown → HTML. `streamdown` itself is React-only (peer deps react/react-dom plus a
-    // mermaid + unified/remark/rehype dep tree), so we use `marked` — the very parser streamdown is
-    // built on — loaded lazily from a CDN. Until it loads (or if the CDN is unreachable) we fall
-    // back to the tiny inline renderer below, so chat never depends on it.
-    let marked = null;
-    import("https://esm.sh/marked@17")
-      .then((m) => { marked = m.marked; marked.use({ gfm: true, breaks: true }); })
-      .catch(() => { marked = null; });
-
-    // KaTeX for LaTeX math in assistant bubbles. Mirrors the marked pattern:
-    // lazy ESM from CDN, graceful null fallback if offline so chat still works.
-    let katex = null;
-    import("https://esm.sh/katex@0.16.11")
-      .then((m) => { katex = m.default ?? m; })
-      .catch(() => { katex = null; });
+    import { modelService } from "./src/services/model-service.js";
+    import { registerRoute, startRouter, currentRoute, navigate, DEFAULT_ROUTE } from "./src/shell/router.js";
+    import { storageEstimate, formatBytes } from "./src/services/db.js";
+    import { getThinking, setThinking } from "./src/services/settings.js";
+    import { getContextLimitPreference, setContextLimitPreference, onContextLimitChange } from "./src/services/context-preference.js";
+    import { chatApp } from "./apps/chat/app.js";
+    import { researchApp } from "./apps/research/app.js";
+    import { codeApp } from "./apps/code/app.js";
+    import { reportsApp } from "./apps/reports/app.js";
 
     const $ = (id) => document.getElementById(id);
     const landing = $("landing");
-    const chat = $("chat");
-    const threadScroll = $("threadScroll");
-    const thread = $("thread");
+    const workstation = $("workstation");
     const loadBtn = $("loadBtn");
     const loadBtnLabel = $("loadBtnLabel");
     const headLoadBtn = $("headLoadBtn");
@@ -1248,863 +1691,176 @@
     const statusText = $("statusText");
     const bar = $("bar");
     const barFill = bar.firstElementChild;
-    const input = $("input");
-    const sendBtn = $("sendBtn");
-    const stopBtn = $("stopBtn");
-    const clearBtn = $("clearBtn");
-    const attachBtn = $("attachBtn");
-    const imageInput = $("imageInput");
-    const attachments = $("attachments");
-    const hint = $("hint");
-    const liveStat = $("liveStat");
-    const thinkingCheck = $("thinkingCheck");
-    const kernelsBtn = $("kernelsBtn");
-    const kernelsOverlay = $("kernelsOverlay");
+    const storageMeter = $("storageMeter");
 
-    let model = null;
-    let kernels = [];
-    let kxCopySource = "";
-    let messages = [];
-    let pendingImage = null; // { url, name } attached image (encoded as data: URL)
-    let thinkingEnabled = false; // Thinking mode: inject the <|think|> system token
-    let thoughtTokenIds = null; // { soc, eoc } special-token ids for the thought block
-    let abortController = null;
-    let isGenerating = false;
-    let isLoading = false;
-    let renderScheduled = false;
-    let renderState = null;
-    let targetProgress = 0; // latest monotonic load fraction [0,1]
-    let shownProgress = 0;  // currently rendered bar fraction (eased toward target each frame)
-    let progressRaf = 0;
+    // ---------- state machine: landing ⇄ workstation ----------
+    function applyState(route) {
+      const inApp = route !== "" && route !== "landing";
+      document.body.classList.toggle("state-app", inApp);
+      document.body.classList.toggle("state-landing", !inApp);
+      landing.hidden = inApp;
+      workstation.hidden = !inApp;
+      if (inApp) window.scrollTo(0, 0);
+    }
+
+    // ---------- topbar: status pill + eased progress bar ----------
+    let targetProgress = 0, shownProgress = 0, progressRaf = 0;
+
+    function setProgressFraction(value) {
+      if (typeof value !== "number" || !Number.isFinite(value)) return;
+      targetProgress = Math.max(Math.min(value, 1), targetProgress); // monotonic
+      if (!progressRaf) progressRaf = requestAnimationFrame(stepProgressBar);
+    }
+    function stepProgressBar() {
+      const gap = targetProgress - shownProgress;
+      shownProgress += gap < 0.0015 ? gap : gap * 0.3;
+      barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
+      progressRaf = shownProgress < targetProgress ? requestAnimationFrame(stepProgressBar) : 0;
+    }
+    function setProgressImmediate(value) {
+      if (progressRaf) { cancelAnimationFrame(progressRaf); progressRaf = 0; }
+      targetProgress = shownProgress = Math.min(Math.max(value, 0), 1);
+      barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
+    }
+
+    // ---------- global context limit (all apps) — declared early so status handler can use it ----------
+    const globalContextLimit = $("globalContextLimit");
+    let contextAllocating = false;
+    async function allocateContextForPreference(prefValue) {
+      if (contextAllocating) return;
+      const pref = prefValue ?? getContextLimitPreference();
+      const model = modelService.model;
+      if (!model?.ensureContextCapacity) return;
+      if (!modelService.ready) return;
+      if (pref === "auto") return; // Auto means use whatever the device provides — don't force a full-arch alloc
+      const arch = Number(modelService.capabilities?.architecturalMax) || 131072;
+      const target = Math.min(arch, Number(pref));
+      if (!Number.isFinite(target) || target <= 0) return;
+      const current = Number(modelService.capabilities?.effectiveContextMax) || 0;
+      if (target <= current) return;
+      contextAllocating = true;
+      try {
+        modelService.setStatus("loading", `Allocating ${(target/1024).toLocaleString()}K context…`);
+        await model.ensureContextCapacity(target);
+        modelService.refreshCapabilities?.();
+        const updated = Number(modelService.capabilities?.effectiveContextMax) || target;
+        modelService.setStatus("ready", `Ready · ${(updated/1024).toLocaleString()}K allocated`);
+      } catch (err) {
+        console.warn("context allocation failed", err);
+        modelService.refreshCapabilities?.();
+        modelService.setStatus("error", `Allocation to ${(target/1024).toLocaleString()}K failed: ${String(err?.message ?? err).slice(0, 110)}`);
+        setTimeout(() => {
+          if (modelService.ready) modelService.refreshCapabilities?.();
+          // restore ready pill after error flash
+          if (modelService.state.status === "error") modelService.setStatus("ready", "Ready · on-device");
+        }, 3200);
+      } finally {
+        contextAllocating = false;
+      }
+    }
+    if (globalContextLimit) {
+      globalContextLimit.value = getContextLimitPreference();
+      globalContextLimit.addEventListener("change", () => {
+        const v = globalContextLimit.value;
+        setContextLimitPreference(v);
+        if (modelService.ready) allocateContextForPreference(v).catch(()=>{});
+      });
+      onContextLimitChange((v) => {
+        if (globalContextLimit.value !== v) globalContextLimit.value = v;
+        if (modelService.ready && v !== "auto") allocateContextForPreference(v).catch(()=>{});
+      });
+    }
+
+    modelService.subscribe((s) => {
+      statusEl.className = "status" + (s.status && s.status !== "idle" ? " " + s.status : "");
+      const runtimeContext = s.capabilities?.effectiveContextMax;
+      const arch = Number(s.capabilities?.architecturalMax) || 131072;
+      const archLabel = (arch / 1024).toLocaleString();
+      statusText.innerHTML = s.status === "ready" && Number.isFinite(runtimeContext)
+        ? `${s.statusText} · runtime ${(runtimeContext / 1024).toLocaleString()}K / ${archLabel}K`
+        : s.statusText;
+      // If model just became ready and a non-auto preference is set, ensure it's allocated
+      if (s.status === "ready" && globalContextLimit && !contextAllocating) {
+        const pref = getContextLimitPreference();
+        if (pref !== "auto") {
+          const target = Math.min(arch, Number(pref));
+          if (Number.isFinite(target) && target > (runtimeContext || 0)) {
+            allocateContextForPreference(pref).catch(()=>{});
+          }
+        }
+      }
+      if (s.status === "ready") {
+        setProgressImmediate(1);
+        bar.classList.add("done");
+        loadBtnLabel.textContent = "Open workstation";
+        headLoadBtn.style.display = "none";
+      } else if (s.status === "error") {
+        bar.classList.add("done");
+        loadBtn.disabled = false;
+        headLoadBtn.disabled = false;
+        loadBtnLabel.textContent = "Retry load";
+        headLoadBtn.style.display = "";
+      } else if (s.status === "loading") {
+        loadBtn.disabled = true;
+        headLoadBtn.disabled = true;
+        loadBtnLabel.textContent = "Loading…";
+        bar.classList.remove("done");
+      }
+      if (s.progress === 0 && s.status === "loading") setProgressImmediate(0.02);
+    });
+
+    // ---------- loading ----------
+    async function launch() {
+      if (modelService.ready) { navigate(DEFAULT_ROUTE); return; }
+      if (modelService.state.loading) return;
+      // jump into the workstation immediately so progress is visible there
+      if (currentRoute() === "") navigate(DEFAULT_ROUTE, { replace: true });
+      try {
+        await modelService.load();
+      } catch (_) { /* status pill already shows the error */ }
+    }
+
+    loadBtn.addEventListener("click", launch);
+    headLoadBtn.addEventListener("click", launch);
 
     if (!navigator.gpu) {
       const msg = "WebGPU isn't available here. Try a recent Chrome, Edge, or Safari Technology Preview.";
       loadBtn.disabled = true;
       headLoadBtn.disabled = true;
-      setStatus("error", msg);
+      modelService.setStatus("error", msg);
     }
 
-    loadBtn.addEventListener("click", loadModel);
-    headLoadBtn.addEventListener("click", loadModel);
-    sendBtn.addEventListener("click", send);
-    stopBtn.addEventListener("click", () => abortController?.abort());
-    clearBtn.addEventListener("click", clearChat);
-    attachBtn.addEventListener("click", () => imageInput.click());
-    imageInput.addEventListener("change", onImagePicked);
-    thinkingCheck.addEventListener("change", () => { thinkingEnabled = thinkingCheck.checked; });
-    kernelsBtn.addEventListener("click", openKernels);
-    kernelsOverlay.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) closeKernels(); });
-    $("kxList").addEventListener("scroll", updateListFade, { passive: true });
-    $("kxCopy").addEventListener("click", copyKernel);
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !kernelsOverlay.hidden) closeKernels(); });
-    $("toTop").addEventListener("click", (e) => { e.preventDefault(); landing.scrollIntoView({ behavior: "smooth" }); });
+    // ---------- global Thinking toggle (all apps) ----------
+    const thinkCheck = $("thinkCheck");
+    thinkCheck.checked = getThinking();
+    thinkCheck.addEventListener("change", () => setThinking(thinkCheck.checked));
 
-    input.addEventListener("input", () => { autoGrow(); refreshSend(); });
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!sendBtn.disabled) send(); }
+    // ---------- storage meter ----------
+    async function refreshStorage() {
+      const est = await storageEstimate();
+      if (est && est.usage > 0) storageMeter.textContent = `${formatBytes(est.usage)} local`;
+    }
+    refreshStorage();
+    setInterval(refreshStorage, 30_000);
+
+    // ---------- routes ----------
+    registerRoute("chat", { title: "Chat", container: $("view-chat"), app: chatApp });
+    registerRoute("research", { title: "Research", container: $("view-research"), app: researchApp });
+    registerRoute("code", { title: "Code", container: $("view-code"), app: codeApp });
+    registerRoute("reports", { title: "Reports", container: $("view-reports"), app: reportsApp });
+
+    document.addEventListener("ws:route", (e) => {
+      applyState(e.detail.id);
+      document.querySelectorAll("#wsNav a").forEach((a) =>
+        a.classList.toggle("active", a.dataset.route === e.detail.id));
     });
-    document.addEventListener("click", (e) => {
-      const seed = e.target.closest(".seed");
-      if (!seed || seed.disabled || !model || isGenerating) return;
-      input.value = seed.textContent;
-      send();
-    });
 
-    function setStatus(state, text) {
-      statusEl.className = "status" + (state ? " " + state : "");
-      if (text !== undefined) statusText.innerHTML = text;
-    }
+    startRouter();
 
-    const MAX_LOAD_ATTEMPTS = 2;
-    let loadAttempts = 0;
-
-    async function loadModel() {
-      if (model || isLoading) return;
-      loadAttempts = 0;
-      await performLoad();
-    }
-
-    async function performLoad() {
-      isLoading = true;
-      loadBtn.disabled = true;
-      headLoadBtn.disabled = true;
-      loadBtnLabel.textContent = "Loading…";
-      bar.classList.remove("done");
-      setProgressImmediate(0.02);
-      setStatus("loading", "Requesting WebGPU device…");
-
-      // Move the visitor down into the chat where progress + conversation live.
-      chat.scrollIntoView({ behavior: "smooth" });
-
-      const started = performance.now();
-      try {
-        // NVIDIA/D3D12: bare subgroupAdd after divergent stores corrupts QatMatMul.
-        // force:true — Windows may report exact 32/32 and otherwise skip the patcher.
-        const guard = await gemma4SgGuard({ force: true });
-        console.info("[gemma4-sg-guard]", guard.mode, guard.adapter, guard.selfTest);
-        model = await Gemma4Mobile.load(LOCAL_MODEL_URL, { ...guard.loadOpts, onProgress: updateLoadProgress });
-        setStatus("loading", "Warming up kernels…");
-        await model.warmup();
-
-        // Vision: load the Gemma 4 vision tower (WGSL kernels, w8a8o8 QAT weights)
-        // and wrap the model so generate() accepts image content. The vision
-        // tower reuses the text kernel's WebGPU device (`model.runtime.host`) so
-        // we don't request a second one — lighter on integrated GPUs.
-        setStatus("loading", "Loading vision tower…");
-        installVisionHook();
-        const vision = await Gemma4Vision.load(VISION_WEIGHTS_URL, { host: model.runtime?.host, onProgress: updateVisionProgress });
-        model = new VisionGemma4Mobile(model, vision);
-        window.__gemmaVision = vision;
-        thoughtTokenIds = model.getSpecialTokenIds?.() ?? null;
-
-        const seconds = ((performance.now() - started) / 1000).toFixed(1);
-        setStatus("ready", `Ready in <strong>${seconds}s</strong> · on-device`);
-        setProgressImmediate(1);
-        bar.classList.add("done");
-        loadBtnLabel.textContent = "Model loaded";
-        headLoadBtn.style.display = "none";
-        enableChat();
-      } catch (error) {
-        console.error(error);
-        // dispose any partially-created model before retrying
-        try { model?.dispose?.(); } catch (_) {}
-        model = null;
-        loadAttempts++;
-        if (loadAttempts < MAX_LOAD_ATTEMPTS) {
-          // A previous interrupted download can leave corrupt Blobs in IndexedDB
-          // (Chrome throws `NotReadableError: The requested file could not be read`
-          // when the blob's backing file is gone). Clear the kernel's cache and retry.
-          setStatus("loading", "Clearing model cache and retrying…");
-          await clearKernelCache();
-          await performLoad();
-          return;
-        }
-        setStatus("error", `Failed to load: ${escapeHtml(String(error?.message ?? error))}`);
-        bar.classList.add("done");
-        loadBtn.disabled = false;
-        headLoadBtn.disabled = false;
-        loadBtnLabel.textContent = "Load model";
-        isLoading = false;
-      }
-    }
-
-    // Clear model caches so a corrupted cache (from an interrupted download — Chrome throws
-    // `NotReadableError` when a cached Blob's backing file is gone) doesn't break future loads.
-    // Covers the kernel's "safetensors-cache-v1" (chunks/meta stores), the vision loader's
-    // "gemma4-vision-cache-v1" (weights store), and CacheStorage (tokenizer/config). Clearing
-    // object stores works even when a connection to the DB is still open.
-    async function clearKernelCache() {
-      try {
-        const dbs = (await (indexedDB.databases?.().catch(() => []))) ?? [];
-        await Promise.all(dbs.map((d) => d.name ? new Promise((resolve) => {
-          try {
-            const req = indexedDB.open(d.name);
-            req.onsuccess = () => {
-              const db = req.result;
-              try {
-                const stores = Array.from(db.objectStoreNames);
-                if (stores.length === 0) { db.close(); resolve(); return; }
-                const tx = db.transaction(stores, "readwrite");
-                stores.forEach((s) => tx.objectStore(s).clear());
-                tx.oncomplete = tx.onerror = tx.onabort = () => { db.close(); resolve(); };
-              } catch (_) { db.close(); resolve(); }
-            };
-            req.onerror = req.onblocked = () => resolve();
-          } catch (_) { resolve(); }
-        }) : Promise.resolve()));
-      } catch (_) {}
-      // Fallback if indexedDB.databases is unavailable: clear the known cache DBs.
-      try {
-        for (const name of ["safetensors-cache-v1", "gemma4-vision-cache-v1"]) {
-          await new Promise((resolve) => {
-            try {
-              const req = indexedDB.open(name);
-              req.onsuccess = () => {
-                const db = req.result;
-                try {
-                  const stores = Array.from(db.objectStoreNames);
-                  if (stores.length === 0) { db.close(); resolve(); return; }
-                  const tx = db.transaction(stores, "readwrite");
-                  stores.forEach((s) => tx.objectStore(s).clear());
-                  tx.oncomplete = tx.onerror = tx.onabort = () => { db.close(); resolve(); };
-                } catch (_) { db.close(); resolve(); }
-              };
-              req.onerror = req.onblocked = () => resolve();
-            } catch (_) { resolve(); }
-          });
-        }
-      } catch (_) {}
-      try {
-        const keys = await caches.keys().catch(() => []);
-        await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})));
-      } catch (_) {}
-    }
-
-    function labelFor(status) {
-      return {
-        init: "Requesting WebGPU device…",
-        tokenizer: "Loading tokenizer…",
-        weights: "Downloading weights…",
-        ready: "Ready.",
-      }[status] ?? status;
-    }
-
-    function updateLoadProgress(event) {
-      if (event.status !== "weights") {
-        setStatus("loading", labelFor(event.status));
-        setPhaseProgress(event.status, event.fraction);
-        return;
-      }
-      const kind = event.kind ?? inferProgressKind(event);
-      const fraction = finiteNumber(event.fraction) ? clamp(event.fraction, 0, 1) : null;
-      // Drive the bar off the BYTE download only. The "tensors" stream counts materialized tensors,
-      // which races far ahead of the download (the many small tensors finish while the big embedding
-      // weights are still downloading by size), so it would leap the bar past the real progress.
-      // Tensor events still update the status text below.
-      if (kind !== "tensors") setPhaseProgress("weights", fraction);
-      setStatus("loading", formatWeightProgress(event, fraction));
-    }
-
-    // Map each load phase onto an increasing slice of the bar (weights — the byte download — owns the
-    // bulk). setProgressFraction's monotonic guard keeps it from ever dipping.
-    function setPhaseProgress(status, frac) {
-      const [lo, hi] = status === "weights"
-        ? [0.04, 1.0]
-        : ({ init: [0, 0.02], tokenizer: [0.02, 0.04], ready: [1, 1] }[status] ?? [0, 1]);
-      const f = finiteNumber(frac) ? clamp(frac, 0, 1) : 0;
-      setProgressFraction(lo + (hi - lo) * f);
-    }
-
-    function formatWeightProgress(event, fraction) {
-      const kind = event.kind ?? inferProgressKind(event);
-      const pct = fraction === null ? "" : ` (${Math.round(fraction * 100)}%)`;
-      const loaded = finiteNumber(event.loaded) ? event.loaded : null;
-      const total = finiteNumber(event.total) ? event.total : null;
-      if (kind === "bytes") {
-        const verb = event.fromCache ? "Loading cached weights" : "Downloading weights";
-        if (loaded !== null && total !== null) return `${verb}: ${formatBytes(loaded)} / ${formatBytes(total)}${pct}`;
-        if (total !== null) return `${verb}: ${formatBytes(total)} total`;
-        return `${escapeHtml(event.message || verb)}…`;
-      }
-      if (loaded !== null && total !== null) {
-        const label = event.message ? ` (${escapeHtml(event.message)})` : "";
-        return `Preparing GPU weights: ${formatInteger(loaded)} / ${formatInteger(total)} tensors${pct}${label}`;
-      }
-      return event.message ? `Preparing GPU weights: ${escapeHtml(event.message)}` : "Preparing GPU weights…";
-    }
-
-    function inferProgressKind(event) {
-      if (event.kind === "bytes" || event.kind === "tensors") return event.kind;
-      if (finiteNumber(event.total) && event.total > 1_000_000) return "bytes";
-      return "tensors";
-    }
-
-    // Record the latest (monotonic) target and let a single rAF loop ease the bar toward it. This
-    // coalesces bursts of byte-progress events into one write per frame and — unlike a fixed CSS
-    // width transition — never lags behind fast progress (a big remaining gap is closed quickly).
-    function setProgressFraction(value) {
-      if (!finiteNumber(value)) return;
-      targetProgress = Math.max(clamp(value, 0, 1), targetProgress); // monotonic — never hops backwards
-      if (!progressRaf) progressRaf = requestAnimationFrame(stepProgressBar);
-    }
-
-    function stepProgressBar() {
-      const gap = targetProgress - shownProgress;
-      shownProgress += gap < 0.0015 ? gap : gap * 0.3; // ~30% of the gap per frame; snap when nearly there
-      barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
-      progressRaf = shownProgress < targetProgress ? requestAnimationFrame(stepProgressBar) : 0;
-    }
-
-    function setProgressImmediate(value) {
-      if (progressRaf) { cancelAnimationFrame(progressRaf); progressRaf = 0; }
-      targetProgress = shownProgress = clamp(value, 0, 1);
-      barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
-    }
-
-    function enableChat() {
-      isLoading = false;
-      input.disabled = false;
-      input.placeholder = "Ask anything…";
-      clearBtn.disabled = false;
-      attachBtn.disabled = false;
-      kernelsBtn.hidden = false;
-      setSeedButtonsEnabled(true);
-      refreshSend();
-      input.focus();
-    }
-
-    function updateVisionProgress(event) {
-      if (event.status === "weights") {
-        const pct = finiteNumber(event.fraction) ? ` (${Math.round(event.fraction * 100)}%)` : "";
-        setStatus("loading", `Loading vision tower${event.message ? ` · ${event.message}` : ""}${pct}`);
-      } else if (event.status !== "init") {
-        setStatus("loading", `Loading vision tower${event.message ? ` · ${event.message}` : ""}`);
-      }
-    }
-
-    // ---- Kernels viewer: the real rendered WGSL the model compiled on this GPU ----
-    function openKernels() {
-      if (!model) return;
-      kernels = model.runtime.getRenderedShaders?.() ?? [];
-      const list = $("kxList");
-      list.replaceChildren();
-      $("kxSub").textContent = kernels.length
-        ? `${kernels.length} WGSL compute shaders · text kernels by Fable 5 · vision tower by DeepSeek V4 Flash · running on your GPU`
-        : "No kernels compiled yet — send a message first.";
-      kernels.forEach((k, i) => {
-        const item = document.createElement("button");
-        item.className = "kx-item";
-        item.type = "button";
-        item.textContent = k.name;
-        item.addEventListener("click", () => selectKernel(i));
-        list.appendChild(item);
-      });
-      // Open on the explanation, with no kernel selected — the source shows only once one is clicked.
-      [...list.children].forEach((el) => el.classList.remove("active"));
-      $("kxSource").hidden = true;
-      $("kxIntro").hidden = false;
-      kxCopySource = "";
-      kernelsOverlay.hidden = false;
-      document.body.classList.add("kx-locked");
-      list.scrollTop = 0;
-      requestAnimationFrame(updateListFade);
-    }
-
-    // Toggle the bottom fade on the kernel list: shown while there is more to scroll, hidden at the end.
-    function updateListFade() {
-      const list = $("kxList");
-      const atEnd = list.scrollHeight <= list.clientHeight + 4
-        || list.scrollTop >= list.scrollHeight - list.clientHeight - 4;
-      list.parentElement.classList.toggle("at-end", atEnd);
-    }
-
-    function selectKernel(i) {
-      const k = kernels[i];
-      if (!k) return;
-      $("kxIntro").hidden = true;   // swap the explanation out for the source
-      $("kxSource").hidden = false;
-      [...$("kxList").children].forEach((el, j) => el.classList.toggle("active", j === i));
-      $("kxName").textContent = k.name;
-      $("kxLines").textContent = `${k.source.split("\n").length} lines`;
-      $("kxCode").innerHTML = highlightWgsl(k.source);
-      $("kxCode").parentElement.scrollTop = 0;
-      kxCopySource = k.source;
-    }
-
-    function closeKernels() {
-      kernelsOverlay.hidden = true;
-      document.body.classList.remove("kx-locked");
-    }
-
-    async function copyKernel() {
-      if (!kxCopySource) return;
-      try {
-        await navigator.clipboard.writeText(kxCopySource);
-        const btn = $("kxCopy");
-        btn.textContent = "Copied";
-        setTimeout(() => { btn.textContent = "Copy"; }, 1200);
-      } catch { /* clipboard blocked — ignore */ }
-    }
-
-    const WGSL_KEYWORDS = new Set(["fn","let","var","const","const_assert","struct","if","else","for","loop","return","break","continue","switch","case","default","while","override","enable","requires","discard","alias","true","false","workgroup","storage","uniform","function","private","read","write","read_write","bitcast"]);
-    const WGSL_TYPES = new Set(["u32","i32","f32","f16","bool","vec2","vec3","vec4","mat2x2","mat3x3","mat4x4","mat2x3","mat3x2","mat2x4","mat4x2","mat3x4","mat4x3","array","atomic","ptr","sampler"]);
-    const WGSL_TOKEN = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|(@[A-Za-z_]\w*)|([A-Za-z_]\w*)|(\d[\w.]*)|(\s+)|([\s\S])/g;
-
-    function highlightWgsl(src) {
-      let out = "";
-      WGSL_TOKEN.lastIndex = 0;
-      let m;
-      while ((m = WGSL_TOKEN.exec(src))) {
-        const [tok, comment, attr, ident, num, ws] = m;
-        if (comment) out += `<span class="k-cm">${escapeHtml(comment)}</span>`;
-        else if (attr) out += `<span class="k-at">${escapeHtml(attr)}</span>`;
-        else if (ident) {
-          const cls = WGSL_KEYWORDS.has(ident) ? "k-kw" : WGSL_TYPES.has(ident) ? "k-ty" : null;
-          out += cls ? `<span class="${cls}">${ident}</span>` : escapeHtml(ident);
-        }
-        else if (num) out += `<span class="k-nu">${escapeHtml(num)}</span>`;
-        else if (ws) out += ws;
-        else out += escapeHtml(tok);
-      }
-      return out;
-    }
-
-    async function send() {
-      const text = input.value.trim();
-      if ((!text && !pendingImage) || !model || isGenerating) return;
-
-      removeWelcome();
-      input.value = "";
-      autoGrow(); refreshSend();
-
-      let userContent;
-      if (pendingImage) {
-        // multimodal message: image first, then text (Gemma 4 best practice)
-        userContent = [{ type: "image", url: pendingImage.url }, { type: "text", text: text || "What is in this image? Describe it in detail." }];
-        const img = document.createElement("img");
-        img.className = "attached-inline";
-        img.src = pendingImage.url;
-        img.alt = "attached image";
-        const bubble = appendUserMessage("");
-        bubble.querySelector(".bubble").appendChild(img);
-        if (text) { const t = document.createElement("div"); t.textContent = text; bubble.querySelector(".bubble").appendChild(t); }
-        pendingImage = null;
-        renderAttachments();
-      } else {
-        userContent = text;
-        appendUserMessage(text);
-      }
-      messages.push({ role: "user", content: userContent });
-
-      const assistant = appendAssistantMessage();
-      const bubble = assistant.querySelector(".bubble");
-      bubble.innerHTML = '<span class="thinking"><span></span><span></span><span></span></span>';
-      scrollDown();
-
-      setGenerating(true);
-      abortController = new AbortController();
-
-      let reply = "";
-      let thinkingText = "";
-      let answerText = "";
-      let inThought = false;
-      let startedAt = 0, firstTokenAt = 0, endedAt = 0, generatedTokens = 0;
-
-      try {
-        // Thinking mode: prepend the <|think|> system token so the model reasons
-        // step-by-step before answering. Kept out of `messages` (per-turn setting).
-        const promptMessages = thinkingEnabled ? [{ role: "system", content: "<|think|>" }, ...messages] : messages;
-        const stream = model.generate(promptMessages, { maxNewTokens: 4096, signal: abortController.signal });
-        startedAt = performance.now();
-        for await (const { text: full, token, delta } of stream) {
-          const now = performance.now();
-          if (!firstTokenAt) firstTokenAt = now;
-          generatedTokens++;
-          reply = full;
-          // The engine strips the thought-block delimiters (<|channel> / <channel|>)
-          // from the decoded text, so split on the token stream instead: the soc token
-          // opens the thought block, the eoc token closes it.
-          if (thoughtTokenIds && typeof token === "number") {
-            if (token === thoughtTokenIds.soc) inThought = true;
-            else if (token === thoughtTokenIds.eoc) inThought = false;
-            else if (typeof delta === "string") {
-              if (inThought) thinkingText += delta;
-              else answerText += delta;
-            }
-          }
-          scheduleAssistantRender(bubble, reply, thinkingText, answerText);
-          updateLiveStat({ startedAt, firstTokenAt, now, generatedTokens });
-        }
-      } catch (error) {
-        console.error(error);
-        if (!reply) reply = `_Stopped: ${String(error?.message ?? error)}_`;
-      } finally {
-        endedAt = performance.now();
-        renderState = null; // cancel any pending coalesced render; show the final reply now
-        renderAssistant(bubble, reply, false, thinkingText, answerText);
-        appendMeta(assistant, { startedAt, firstTokenAt, endedAt, generatedTokens });
-        scrollDown(); // the meta line is added after the reply — keep it in view
-        // Store only the final answer — never feed the model's own thoughts back
-        // into the next turn's context (Gemma 4 best practice).
-        messages.push({ role: "assistant", content: answerText || reply });
-        setGenerating(false);
-        liveStat.textContent = "";
-        abortController = null;
-        input.focus();
-      }
-    }
-
-    function setGenerating(on) {
-      isGenerating = on;
-      input.disabled = on;
-      clearBtn.disabled = on;
-      thinkingCheck.disabled = on;
-      sendBtn.style.display = on ? "none" : "";
-      stopBtn.style.display = on ? "grid" : "none";
-      setStatus(on ? "busy" : "ready", on ? "Generating…" : "Ready · on-device");
-      hint.textContent = on ? "Generating on-device…" : "Runs fully on-device — nothing leaves your machine";
-      refreshSend();
-    }
-
-    function updateLiveStat({ startedAt, firstTokenAt, now, generatedTokens }) {
-      if (generatedTokens <= 1) { liveStat.textContent = `TTFT ${(firstTokenAt - startedAt).toFixed(0)} ms`; return; }
-      const decodeSeconds = Math.max((now - firstTokenAt) / 1000, 1e-9);
-      const tps = (generatedTokens - 1) / decodeSeconds;
-      liveStat.textContent = `${tps.toFixed(0)} tok/s`;
-    }
-
-    function clearChat() {
-      messages = [];
-      pendingImage = null;
-      renderAttachments();
-      model?.reset();
-      thread.replaceChildren(createWelcome());
-      clearBtn.disabled = !model;
-      setSeedButtonsEnabled(Boolean(model));
-      input.focus();
-    }
-
-    function onImagePicked() {
-      const file = imageInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        pendingImage = { url: String(reader.result), name: file.name };
-        renderAttachments();
-        refreshSend();
-      };
-      reader.readAsDataURL(file);
-      imageInput.value = "";
-    }
-
-    function renderAttachments() {
-      attachments.replaceChildren();
-      if (!pendingImage) { attachments.hidden = true; return; }
-      attachments.hidden = false;
-      const chip = document.createElement("div");
-      chip.className = "attachment";
-      const img = document.createElement("img");
-      img.src = pendingImage.url;
-      img.alt = "";
-      const name = document.createElement("span");
-      name.textContent = pendingImage.name || "image";
-      const rm = document.createElement("button");
-      rm.type = "button";
-      rm.textContent = "×";
-      rm.title = "Remove image";
-      rm.addEventListener("click", () => { pendingImage = null; renderAttachments(); refreshSend(); });
-      chip.append(img, name, rm);
-      attachments.appendChild(chip);
-    }
-
-    function appendUserMessage(text) {
-      const msg = document.createElement("div");
-      msg.className = "msg user";
-      msg.appendChild(roleLabel("You"));
-      const bubble = document.createElement("div");
-      bubble.className = "bubble user";
-      bubble.textContent = text;
-      msg.appendChild(bubble);
-      thread.appendChild(msg);
-      scrollDown();
-      return msg;
-    }
-
-    function appendAssistantMessage() {
-      const msg = document.createElement("div");
-      msg.className = "msg assistant";
-      msg.appendChild(roleLabel("Gemma"));
-      const bubble = document.createElement("div");
-      bubble.className = "bubble assistant";
-      msg.appendChild(bubble);
-      thread.appendChild(msg);
-      return msg;
-    }
-
-    function roleLabel(text) {
-      const label = document.createElement("div");
-      label.className = "role";
-      label.textContent = text;
-      return label;
-    }
-
-    function appendMeta(msg, timing) {
-      if (timing.generatedTokens <= 0) return;
-      const stats = generationStats(timing);
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      const parts = [`${timing.generatedTokens} tok`, `TTFT ${stats.ttftMs.toFixed(0)} ms`];
-      if (stats.decodeTokensPerSecond > 0) parts.push(`${stats.decodeTokensPerSecond.toFixed(1)} tok/s`);
-      meta.textContent = parts.join("  ·  ");
-      msg.appendChild(meta);
-    }
-
-    function generationStats({ startedAt, firstTokenAt, endedAt, generatedTokens }) {
-      if (generatedTokens <= 0 || !startedAt || !firstTokenAt || !endedAt) return { ttftMs: 0, decodeTokensPerSecond: 0 };
-      const decodeTokens = Math.max(generatedTokens - 1, 0);
-      const decodeSeconds = Math.max((endedAt - firstTokenAt) / 1000, 1e-9);
-      return { ttftMs: firstTokenAt - startedAt, decodeTokensPerSecond: decodeTokens > 0 ? decodeTokens / decodeSeconds : 0 };
-    }
-
-    // Coalesce streamed renders to one per animation frame — marked re-parses the full reply each
-    // call, so parsing per token (≈250/s) would tax decode; rAF caps it to the display rate.
-    function scheduleAssistantRender(bubble, raw, thinkingText, answerText) {
-      renderState = { bubble, raw, thinkingText, answerText };
-      if (renderScheduled) return;
-      renderScheduled = true;
-      requestAnimationFrame(() => {
-        renderScheduled = false;
-        if (!renderState) return;
-        renderAssistant(renderState.bubble, renderState.raw, true, renderState.thinkingText, renderState.answerText);
-        scrollDown();
-      });
-    }
-
-    // ---- Math rendering (KaTeX) ----
-    // Extract LaTeX to placeholders so marked/sanitize don't corrupt it, then
-    // restore as katex.renderToString HTML. Code fences and inline code are
-    // protected first so $ inside code is never treated as math.
-
-    // Placeholder token must not appear in marked output — use a span-like id that
-    // marked leaves as literal text inside the HTML.
-    const MATH_PH = "@@MATH";
-    const CODE_PH = "@@CODE";
-
-    function extractCodePlaceholders(raw, codeStore) {
-      let s = String(raw || "");
-      // fenced code blocks ```...```
-      s = s.replace(/```[\s\S]*?```/g, (m) => {
-        const id = `${CODE_PH}${codeStore.length}@@`;
-        codeStore.push(m);
-        return id;
-      });
-      // inline code `...`
-      s = s.replace(/`[^`]*`/g, (m) => {
-        const id = `${CODE_PH}${codeStore.length}@@`;
-        codeStore.push(m);
-        return id;
-      });
-      return s;
-    }
-
-    function restoreCodePlaceholders(html, codeStore) {
-      let out = html;
-      for (let i = 0; i < codeStore.length; i++) {
-        const ph = `${CODE_PH}${i}@@`;
-        // code placeholders should be replaced with their escaped/marked form
-        // — re-parse them through marked inline so they become <code> as usual
-        const codeSrc = codeStore[i];
-        let rendered;
-        if (marked) {
-          try { rendered = sanitizeHtml(marked.parse(codeSrc)); }
-          catch { rendered = `<code>${escapeHtml(codeSrc.slice(1, -1))}</code>`; }
-        } else {
-          const inner = codeSrc.startsWith("```") ? codeSrc : codeSrc.slice(1, -1);
-          rendered = codeSrc.startsWith("```")
-            ? `<pre><code>${escapeHtml(inner.replace(/^```\w*\n?/, "").replace(/```$/, ""))}</code></pre>`
-            : `<code>${escapeHtml(inner)}</code>`;
-        }
-        // placeholders appear as plain text in the HTML (escaped by marked's paragraph wrapping)
-        // so replace with case that marked may have wrapped; do simple string replace on the escaped placeholder
-        out = out.split(ph).join(rendered);
-        // also handle case where the placeholder got wrapped in <p> by marked
-        out = out.split(`<p>${ph}</p>`).join(rendered);
-      }
-      return out;
-    }
-
-    function extractMathPlaceholders(raw, mathStore) {
-      let s = String(raw || "");
-      const push = (latex, display) => {
-        const id = `${MATH_PH}${mathStore.length}@@`;
-        mathStore.push({ latex, display });
-        return id;
-      };
-      // Preserve escaped dollars so they don't start/close delimiters.
-      const ESC = "@@ESCDOLLAR@@";
-      s = s.replace(/\\\$/g, ESC);
-      // Display math: $$ ... $$  (non-greedy, dotall)
-      s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, body) => push(body, true));
-      // Display math: \[ ... \]
-      s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, body) => push(body, true));
-      // Inline math: \( ... \)
-      s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, body) => push(body, false));
-      // Inline math: $ ... $ — require non-space adjacency on open/close to avoid
-      // matching currency like "$5 and $10". Single char delimiters only.
-      s = s.replace(/(?<!\S)\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\w)/g, (_, body) => {
-        // body must contain non-whitespace and not be only digits/commas (price heuristic)
-        const t = body.trim();
-        if (!t) return `$${body}$`;
-        // if body looks like a price (digits, commas, dots only), leave it
-        if (/^[\d,\.]+$/.test(t)) return `$${body}$`;
-        return push(body, false);
-      });
-      // Restore escaped dollars that were not consumed as math
-      s = s.split(ESC).join("\\$");
-      return s;
-    }
-
-    function renderMathPlaceholders(html, mathStore) {
-      if (mathStore.length === 0) return html;
-      let out = html;
-      for (let i = 0; i < mathStore.length; i++) {
-        const ph = `${MATH_PH}${i}@@`;
-        const { latex, display } = mathStore[i];
-        let rendered;
-        if (katex) {
-          try {
-            rendered = katex.renderToString(latex, { throwOnError: false, displayMode: display, strict: "ignore" });
-          } catch {
-            rendered = display
-              ? `<span class="katex-error">${escapeHtml(latex)}</span>`
-              : `<span class="katex-error">${escapeHtml(latex)}</span>`;
-          }
-        } else {
-          // Offline fallback: show raw LaTeX escaped so $...$ is visible
-          const d = display ? `$$${latex}$$` : `$${latex}$`;
-          rendered = `<code>${escapeHtml(d)}</code>`;
-        }
-        // Placeholders survive marked/sanitize as plain text; replace in HTML.
-        // marked wraps standalone placeholders in <p> — handle both forms.
-        if (out.includes(`<p>${ph}</p>`)) out = out.split(`<p>${ph}</p>`).join(rendered);
-        out = out.split(ph).join(rendered);
-        // Also handle placeholder that got HTML-escaped inside a code-like context
-        out = out.split(escapeHtml(ph)).join(rendered);
-      }
-      return out;
-    }
-
-    function renderMarkdown(raw) {
-      // Protect code, then extract math, then markdown, then restore.
-      const codeStore = [];
-      const mathStore = [];
-      let tmp = extractCodePlaceholders(raw || "", codeStore);
-      tmp = extractMathPlaceholders(tmp, mathStore);
-      if (marked) {
-        try {
-          let html = sanitizeHtml(marked.parse(tmp));
-          // marked may escape our placeholders — restore math first so placeholders
-          // inside <p> are found correctly, then code.
-          html = renderMathPlaceholders(html, mathStore);
-          // Code placeholders were extracted before marked — but we split them out
-          // and rendered them above outside the main parse for correctness.
-          // If any code placeholders remain (edge: inline code not captured), restore:
-          html = restoreCodePlaceholders(html, codeStore);
-          return html;
-        } catch { /* fall through */ }
-      }
-      // Fallback without marked: re-inject code as escaped, then paragraphs.
-      // Reconstruct tmp by expanding code placeholders back to raw text before paragraph split.
-      let fallbackRaw = tmp;
-      for (let i = 0; i < codeStore.length; i++) fallbackRaw = fallbackRaw.split(`${CODE_PH}${i}@@`).join(codeStore[i]);
-      // Need to re-extract math for fallback — simpler: build HTML paragraphs then inject math HTML.
-      // Use the same mathStore but on fallbackRaw split: render math placeholders via
-      // temporary split on MATH_PH tokens.
-      const parts = fallbackRaw.split(new RegExp(`(${MATH_PH}\\d+@@)`, "g"));
-      const htmlParts = parts.map((part) => {
-        const m = part.match(new RegExp(`^${MATH_PH}(\\d+)@@$`));
-        if (m) {
-          const idx = Number(m[1]);
-          const { latex, display } = mathStore[idx] || { latex: "", display: false };
-          if (katex) {
-            try { return katex.renderToString(latex, { throwOnError: false, displayMode: display, strict: "ignore" }); }
-            catch { return `<span class="katex-error">${escapeHtml(latex)}</span>`; }
-          }
-          return `<code>${escapeHtml(display ? `$$${latex}$$` : `$${latex}$`)}</code>`;
-        }
-        if (!part.trim()) return "";
-        const safe = escapeHtml(part);
-        const paras = safe.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-        if (paras.length === 0) return "";
-        return paras.map((p) => `<p>${formatInline(p).replace(/\n/g, "<br>")}</p>`).join("");
-      });
-      return htmlParts.join("");
-    }
-
-    function renderAssistant(bubble, raw, withCaret, thinkingText, answerText) {
-      const prevOpen = bubble.querySelector(".thinking-block")?.open;
-      // The thought block opens with the model's "<|channel>thought\n" marker; the
-      // soc token is stripped from the text but the literal "thought" remains
-      // (optionally followed by a newline).
-      const thinking = (thinkingText || "").replace(/^thought\s*/, "");
-      // When a thought split is active, `raw` (=cumulative `full`) already
-      // contains the thinking content, so falling back to it would render the
-      // reasoning twice — once inside the <details> and again as normal text.
-      // Only fall back to `raw` when neither thinking nor answer was split.
-      const answer = (thinking || answerText) ? (answerText || "") : (raw || "");
-      let html = "";
-      if (thinking) {
-        const open = prevOpen ?? true; // preserve the user's collapse state across re-renders
-        html += `<details class="thinking-block"${open ? " open" : ""}><summary>Thinking</summary><div class="thinking-body">${renderMarkdown(thinking)}</div></details>`;
-      }
-      html += renderMarkdown(answer);
-      bubble.innerHTML = html;
-      if (withCaret) appendCaret(bubble);
-    }
-
-    function appendCaret(bubble) {
-      const caret = document.createElement("span");
-      caret.className = "caret";
-      // Attach after the last top-level block: <p> or .katex-display (display math),
-      // or inside the last block if it's the only target. The thinking body is
-      // nested inside .thinking-block so it's excluded by :scope.
-      const blocks = bubble.querySelectorAll(":scope > p, :scope > .katex-display, :scope > span.katex-display");
-      if (blocks.length > 0) {
-        const last = blocks[blocks.length - 1];
-        // For .katex-display the caret should sit inline after it, not inside rendered math.
-        if (last.classList.contains("katex-display")) last.after(caret);
-        else last.appendChild(caret);
-        return;
-      }
-      bubble.appendChild(caret);
-    }
-
-    // Strip anything executable from the model's markdown before inserting it (defence in depth — a
-    // local model is the only content source, but raw <script>/event handlers/javascript: URLs are out).
-    // KaTeX output is allowed through: span.katex*, MathML elements, and katex-prefixed classes.
-    function sanitizeHtml(html) {
-      const tpl = document.createElement("template");
-      tpl.innerHTML = html;
-      tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta,form").forEach((el) => el.remove());
-      const KA_TEX_TAGS = new Set(["math","semantics","mrow","mi","mo","mn","msup","msub","msubsup","mfrac","msqrt","mroot","mtext","mtable","mtr","mtd","annotation","annotation-xml"]);
-      tpl.content.querySelectorAll("*").forEach((el) => {
-        const tag = el.tagName.toLowerCase();
-        // Allow MathML tags that KaTeX emits
-        if (KA_TEX_TAGS.has(tag)) return;
-        for (const attr of [...el.attributes]) {
-          const name = attr.name.toLowerCase();
-          if (name === "class" && /katex/.test(attr.value)) continue;
-          if (name === "style" && el.closest(".katex")) continue;
-          if (name.startsWith("aria-")) continue;
-          if (name === "xmlns" && tag === "math") continue;
-          if (name === "encoding" && tag === "annotation") continue;
-          if (name.startsWith("on") || ((name === "href" || name === "src") && /^\s*(javascript|data):/i.test(attr.value))) {
-            el.removeAttribute(attr.name);
-          }
-        }
-      });
-      return tpl.innerHTML;
-    }
-
-    function formatInline(text) {
-      return text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+?)`/g, "<code>$1</code>");
-    }
-
-    function removeWelcome() { $("welcome")?.remove(); }
-
-    function createWelcome() {
-      const welcome = document.createElement("div");
-      welcome.className = "welcome";
-      welcome.id = "welcome";
-      welcome.innerHTML = `
-        <h2>What's on your <span class="thin">mind today?</span></h2>
-        <p>Model runs entirely on your device.</p>
-        <div class="seeds">
-          <button class="seed" type="button">How does WebGPU differ from WebGL?</button>
-          <button class="seed" type="button">Write a haiku about on-device AI</button>
-          <button class="seed" type="button">What is quantization-aware training?</button>
-        </div>`;
-      return welcome;
-    }
-
-    function setSeedButtonsEnabled(enabled) {
-      document.querySelectorAll(".seed").forEach((s) => { s.disabled = !enabled; });
-    }
-    function refreshSend() { sendBtn.disabled = isGenerating || !model || (input.value.trim() === "" && !pendingImage); }
-    function autoGrow() { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 180)}px`; }
-    function scrollDown() { threadScroll.scrollTop = threadScroll.scrollHeight; }
-    function finiteNumber(v) { return typeof v === "number" && Number.isFinite(v); }
-    function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
-    function formatInteger(v) { return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(v); }
-    function formatBytes(bytes) {
-      const units = ["B", "KB", "MB", "GB"]; let v = bytes, u = 0;
-      while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
-      // GB shows 2 decimals (1.12 GB) so it ticks finely past 1 GB; smaller units keep 0–1.
-      const digits = u === 3 ? 2 : (v >= 10 || u === 0 ? 0 : 1);
-      return `${v.toFixed(digits)} ${units[u]}`;
-    }
-    function escapeHtml(v) {
-      return v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    // PWA: offline app shell after first load. Weights are handled by the
+    // engine's own caches — the service worker never touches them.
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+      navigator.serviceWorker.register("./sw.js").catch(() => { /* offline install is best-effort */ });
     }
   </script>
 </body>
