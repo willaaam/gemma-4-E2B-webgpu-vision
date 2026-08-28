@@ -6,6 +6,7 @@
 // every app needs.
 
 import { modelService } from "./model-service.js";
+import { getTemperaturePreference } from "./temperature-preference.js";
 
 let lockHolder = null; // human-readable label of whoever holds the lock
 
@@ -20,8 +21,7 @@ export class ContextLimitError extends Error {
     Object.assign(this, details);
   }
 }
-
-export async function preflightGeneration({ messages, maxNewTokens = 4096, contextMax } = {}) {
+export async function preflightGeneration({ messages, maxNewTokens = null, contextMax } = {}) {
   const model = modelService.model;
   if (!model) throw new Error("Model not loaded");
   if (typeof model.countPromptTokens !== "function") throw new Error("Model does not expose exact prompt token counting");
@@ -33,14 +33,19 @@ export async function preflightGeneration({ messages, maxNewTokens = 4096, conte
   const allowedContextMax = Number.isFinite(requestedContextMax) && requestedContextMax > 0
     ? Math.min(architecturalMax, Math.floor(requestedContextMax))
     : architecturalMax;
-  const requestedMaxNewTokens = Math.max(0, Math.floor(Number(maxNewTokens) || 0));
+  const requestedValue = Number(maxNewTokens);
+  const requestedMaxNewTokens = Number.isFinite(requestedValue) && requestedValue > 0
+    ? Math.floor(requestedValue)
+    : null;
   const safetyTokens = 1;
   let effectiveContextMax = Math.min(
     allowedContextMax,
     Math.max(1, Math.floor(Number(capabilities?.effectiveContextMax) || architecturalMax))
   );
-  const requiredCapacity = promptTokens + requestedMaxNewTokens + safetyTokens;
-  if (requiredCapacity > effectiveContextMax && requiredCapacity <= allowedContextMax && model.ensureContextCapacity) {
+  const requiredCapacity = requestedMaxNewTokens == null
+    ? promptTokens + safetyTokens
+    : promptTokens + requestedMaxNewTokens + safetyTokens;
+  if (requestedMaxNewTokens != null && requiredCapacity > effectiveContextMax && requiredCapacity <= allowedContextMax && model.ensureContextCapacity) {
     try { await model.ensureContextCapacity(requiredCapacity); } catch (_) {}
     modelService.refreshCapabilities?.();
     capabilities = model.getContextCapabilities?.() ?? modelService.capabilities;
@@ -59,14 +64,13 @@ export async function preflightGeneration({ messages, maxNewTokens = 4096, conte
   return {
     promptTokens,
     requestedMaxNewTokens,
-    maxNewTokens: Math.min(requestedMaxNewTokens, availableTokens),
+    maxNewTokens: requestedMaxNewTokens == null ? availableTokens : Math.min(requestedMaxNewTokens, availableTokens),
     safetyTokens,
     effectiveContextMax,
     architecturalMax,
     contextMax: allowedContextMax,
   };
 }
-
 // Acquire the global generation lock. Returns an unlock function, or null if busy.
 export function acquireLock(owner = "app") {
   if (lockHolder) return null;
@@ -90,11 +94,12 @@ export function generationStats({ startedAt, firstTokenAt, endedAt, generatedTok
 // Split the engine's token stream into thinking vs answer text using the
 // special soc/eoc token ids (the engine strips the literal delimiters).
 // Returns { run, result } where result resolves to { reply, thinkingText, answerText, stats }.
-export async function streamGeneration({ messages, maxNewTokens = 4096, contextMax, signal, onToken }) {
+export async function streamGeneration({ messages, maxNewTokens = null, contextMax, temperature = null, signal, onToken }) {
   const model = modelService.model;
   if (!model) throw new Error("Model not loaded");
   const preflight = await preflightGeneration({ messages, maxNewTokens, contextMax });
   const thoughtTokenIds = modelService.thoughtTokenIds;
+  const effTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : getTemperaturePreference();
 
   let reply = "";
   let thinkingText = "";
@@ -105,7 +110,7 @@ export async function streamGeneration({ messages, maxNewTokens = 4096, contextM
   let generatedTokens = 0;
 
   try {
-    const stream = model.generate(messages, { maxNewTokens: preflight.maxNewTokens, signal });
+    const stream = model.generate(messages, { maxNewTokens: preflight.maxNewTokens, temperature: effTemperature, signal });
     for await (const { text: full, token, delta } of stream) {
       const now = performance.now();
       if (!firstTokenAt) firstTokenAt = now;
@@ -143,11 +148,11 @@ export async function streamGeneration({ messages, maxNewTokens = 4096, contextM
 // onToken receives incremental updates for live rendering.
 // Pass skipLock:true when the CALLER already holds the lock (e.g. the agent
 // loop inside an app that acquired it) — otherwise re-acquiring throws "busy".
-export async function complete({ messages, maxNewTokens = 4096, contextMax, signal, owner = "app", onToken, skipLock = false }) {
+export async function complete({ messages, maxNewTokens = null, contextMax, temperature = null, signal, owner = "app", onToken, skipLock = false }) {
   const unlock = skipLock ? null : acquireLock(owner);
   if (!skipLock && !unlock) throw new Error("busy");
   try {
-    return await streamGeneration({ messages, maxNewTokens, contextMax, signal, onToken });
+    return await streamGeneration({ messages, maxNewTokens, contextMax, temperature, signal, onToken });
   } finally {
     unlock?.();
   }

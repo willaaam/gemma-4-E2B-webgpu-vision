@@ -7,7 +7,8 @@
   "scripts": {
     "serve": "node tools/serve.mjs 4173",
     "start": "node tools/serve.mjs 4173",
-    "check": "node --check tools/serve.mjs && echo 'tools OK'"
+    "check": "node --check tools/serve.mjs && echo 'tools OK'",
+    "test": "node --test testing/*.test.js"
   },
   "keywords": [
     "webgpu",
@@ -19,8 +20,5 @@
     "on-device",
     "transformers"
   ],
-  "license": "MIT",
-  "dependencies": {
-    "opencode-ai": "^1.18.23"
-  }
+  "license": "MIT"
 }

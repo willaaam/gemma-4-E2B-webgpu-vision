@@ -56,7 +56,7 @@ const DEFAULT_FILES = {
 Welcome to the agentic code workspace.
 
 * Create files & folders in the explorer on the left
-* Open files to edit with syntax highlighting (CodeMirror)
+* Open files to edit with syntax highlighting
 * Ask the agent on the right to build, refactor, or fix code
 * Run Python files via Pyodide or preview Web files in the sandbox
 * Select code in the editor → “Add selection” to give the agent extra context
@@ -219,6 +219,7 @@ export class CodeProject {
     if (!from) throw new Error("Cannot move root");
     if (!isValidPath(to)) throw new Error(`Invalid destination: ${newFolder}`);
     if (from === to) return 0;
+    if (to.startsWith(from + "/")) throw new Error("Cannot move a folder into itself");
     const entries = [...this.files.entries()].filter(([k]) => k === from || k.startsWith(from + "/"));
     if (entries.length === 0) throw new Error(`Folder not found: ${oldFolder}`);
     // check collisions

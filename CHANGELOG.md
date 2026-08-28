@@ -3,6 +3,24 @@
 All notable changes to this fork are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Test server stall at ~91% on localhost** — `tools/serve.mjs` now throttles to
+  ~1 Gbit/s global by default (token-bucket, `THROTTLE_MBPS` / `--throttle-mbps`,
+  `--no-throttle` to disable). The unthrottled loopback burst of 4×128 MiB
+  Range requests saturated Chrome's `ReadableStream`+IndexedDB pipeline
+  (`gemma-4-e2b.js: md=128<<20, hd=4` → `streamAll` → `writeTensor`), freezing
+  `Loading cached weights: 1.79 GB / 1.97 GB (91%)`. Also fixed `HEAD` (engine
+  size probe) to not stream a body and added `close`/`error` cleanup for
+  `createReadStream` pipes. Documented in `README.md` Option B and
+  `tools/serve.mjs:1` header.
+
+### Changed
+
+- `tools/serve.mjs` usage: `node tools/serve.mjs [port] [root] [--throttle-mbps N] [--no-throttle]`; `highWaterMark` 1 MiB for weight streams.
+
 ## [2.0.0] — 2026-08-23
 
 The chat page became a multi-app, fully on-device **AI workstation**.

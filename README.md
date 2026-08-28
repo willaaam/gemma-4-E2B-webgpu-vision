@@ -74,13 +74,13 @@ A browser-native, OpenCode/Codex-inspired workspace:
 
 - **Left — Explorer** (`280px`): collapsible tree with folders/files (create / rename / move by drag-and-drop or `⋯` menu, delete). Toolbar: `+ File`, `+ Folder`, `⬆ Zip` (upload a `.zip` — fflate-unzipped, text files merged into the virtual FS), `⬇ Zip` (download entire project), `Reset` (restores `README.md` + `main.py` + `index.html`/`style.css`/`script.js`).
 - **Center — Editor + Output**: Syntax-highlighted editor for Python / JS / HTML / CSS / JSON / Markdown, tab bar for open files, selection-aware. Bottom dock: `Output` (Pyodide stdout/stderr/plots) vs `Preview` (sandboxed iframe for Web — `allow-scripts` only, inlines `style.css`/`script.js` into `index.html`). `▶ Run` executes the active file (`.py` → Pyodide with full FS sync so `import utils.helpers` works; `.html` → Preview). Web preview auto-runs on edit (debounced).
-- **Right — Agent** (`380px`): chat transcript with thinking blocks, tool cards, and status. The harness runs up to 14 steps per turn, can call up to 3 tools per step, then finishes with an `answer`.
+- **Right — Agent** (`380px`): chat transcript with thinking blocks, tool cards, and status. The harness runs up to 14 sequential steps per turn, observes one tool result before choosing the next action, then finishes with an `answer`.
 
 **How the agent works**
 
-- **Harness** (`src/lib/code-harness.js`): prompt instructs the model to emit ` ```tool {"name":"...","args":{}} ``` fences. Tools are executed locally and results are fed back as observations. Reasoning is via the global `Thinking` toggle (`<|think|>`). If the prompt would exceed `effectiveContextMax`, the harness **stuffs all files** when they fit the budget, otherwise it **BM25-retrieves** the most relevant chunks — identical to Research. Long conversations are **compacted** by summarizing older turns with the model itself.
+- **Harness** (`src/harness/harness.js`): prompt instructs the model to emit one ` ```tool {"name":"...","args":{}} ``` fence per turn. Tools are validated, executed locally, and results are fed back as observations. The model may use the remaining physical context capacity for a turn; trajectory loop detection still bounds repeated no-progress actions. After each file mutation, the harness runs a bounded Python or Web verification through the executor and feeds stdout, stderr, console output, and errors back to the model. If a file payload is cut off, the harness recovers its complete source-line prefix, writes it, and asks the model to inspect and continue the real file. File mutations are verified against the exact changed path before the agent can finish. Reasoning is via the global `Thinking` toggle (`<|think|>`). If the prompt would exceed `effectiveContextMax`, the harness **stuffs all files** when they fit the budget, otherwise it **BM25-retrieves** the most relevant chunks — identical to Research. Long conversations are **compacted** by summarizing older turns with the model itself; unreducible context and repeated no-progress calls stop cleanly.
 - **Tools** (JSON):
-  - `list_files`, `read_file`, `write_file`, `edit_file` (exact old_text → new_text), `delete_file`, `mkdir`, `search` (BM25 over the codebase), `run_python` (syncs virtual FS → Pyodide, captures plots), `run_web` (renders via `WebRunner` + bridges console), `install_package` (micropip).
+  - `list_files`, `read_file`, `write_file`, `append_file` (continue a large file one bounded chunk at a time), `apply_patch`, `delete_file`, `mkdir`, `search` (BM25 over the codebase), `run_python` (syncs virtual FS → Pyodide, captures plots, syntax-checks interactive programs without executing them), `run_web` (renders via `WebRunner` + bridges console), `install_package` (micropip).
 - **Selection context**: highlight code in the editor → bar appears `→ Add selection`. Clicking attaches that snippet as an extra block in the next agent turn (`[User selected code from path]`), so you can scope fixes without stuffing the whole repo. Mirrors Claude Code’s selection flow.
 - **Python/Web decoupling**: the file tree is runtime-agnostic. You can mix `app.py` and `web/` in one project; runners dispatch by extension (`.py` → Pyodide, `.html/.css/.js` → iframe). `import` works across folders (`a/b.py` → `from a.b import x` via Pyodide FS).
 
@@ -140,6 +140,10 @@ No build step required.
 # from this repo's root
 node tools/serve.mjs 4173
 # or: npm run serve
+# throttle defaults to 1000 Mbit/s (~125 MB/s global) to avoid the
+# localhost stall at ~91% (see note below).
+#   THROTTLE_MBPS=0 node tools/serve.mjs 4173   # disable
+#   node tools/serve.mjs 4173 . --throttle-mbps 500  # 500 Mbit/s
 ```
 
 Then open [http://localhost:4173/](http://localhost:4173/) → **Load model** → chat.
@@ -147,6 +151,16 @@ Then open [http://localhost:4173/](http://localhost:4173/) → **Load model** �
 > 💡 **Fully offline?** Place `model.safetensors` under
 > `models/google/gemma-4-E2B-it-qat-mobile-transformers/` and open the page with
 > `?localweights=1` (both `index.html` and `test-vision.html` respect this).
+
+> ⚠️ **Local testing stall at 91%?** At loopback the kernel streams
+> `4×128 MiB` Range requests concurrently (`hd=4, md=128 MiB`). Without a cap
+> that bursts `>>1 Gbit`, saturating Chrome's `ReadableStream`+IndexedDB
+> pipeline (`streamAll` → `writeTensor` per chunk) and freezing progress at
+> e.g. `Loading cached weights: 1.79 GB / 1.97 GB (91%)`. `tools/serve.mjs`
+> now caps output to **~1 Gbit/s global** (token-bucket, `THROTTLE_MBPS`
+> env / `--throttle-mbps` flag) so IDB commits can keep up. The same file
+> also now handles `HEAD` correctly (engine probes size) and aborts streams
+> on `close`. Disable with `--no-throttle` if you need full loopback speed.
 
 ---
 

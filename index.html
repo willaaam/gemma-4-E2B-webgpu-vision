@@ -1128,6 +1128,30 @@
   }
   .ws-context-control select option { color: #f2f3f5; background: #111418; }
   .ws-context-control select:focus { outline: 1px solid rgba(100,255,160,.45); outline-offset: 1px; }
+  .ws-info-btn {
+    appearance: none; border: 1px solid var(--line); background: var(--panel);
+    color: var(--t3); width: 18px; height: 18px; border-radius: 50%;
+    display: grid; place-items: center; font: 11px var(--mono); line-height: 1;
+    cursor: pointer; flex: none; padding: 0;
+  }
+  .ws-info-btn:hover { color: var(--t1); border-color: rgba(100,255,160,.35); background: var(--panel-hover); }
+  .ws-info-popover {
+    position: fixed; z-index: 100; max-width: 320px;
+    background: #0e0f12; border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 14px 16px;
+    font: 12.5px/1.6 system-ui, sans-serif; color: var(--t2);
+  }
+  .ws-info-popover[hidden] { display: none; }
+  .ws-info-popover h4 { font-size: 12px; font-weight: 600; color: var(--t1); margin: 0 0 6px; letter-spacing: .02em; }
+  .ws-info-popover p { margin: 0 0 8px; }
+  .ws-info-popover p:last-child { margin-bottom: 0; }
+  .ws-info-popover .mono { font-size: 11px; color: var(--t3); }
+  .ws-info-popover .ws-info-close {
+    position: absolute; top: 8px; right: 8px;
+    appearance: none; border: 0; background: transparent; color: var(--t4);
+    font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  }
+  .ws-info-popover .ws-info-close:hover { color: var(--t1); background: var(--panel-hover); }
   .ws-view-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px;
@@ -1347,14 +1371,46 @@
   }
   .ws-editor:focus { outline: none; }
 
-  .ws-out { flex: none; height: 38%; min-height: 160px; display: flex; flex-direction: column; }
+  .ws-out { flex: none; height: 52%; min-height: 220px; display: flex; flex-direction: column; }
+  .ws-out.collapsed { height: 36px !important; min-height: 36px !important; overflow: hidden; }
+  .ws-out.collapsed .ws-console, .ws-out.collapsed .ws-preview-frame, .ws-out.collapsed .ws-preview-view { display: none !important; }
   .ws-out-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; border-bottom: 1px solid var(--line-soft); flex: none; }
   .ws-console { flex: 1; overflow: auto; margin: 0; padding: 10px 14px; font-size: 12px; line-height: 1.7; color: var(--t2); }
   .ws-console-line.error { color: var(--danger); }
   .ws-console-line.warn { color: var(--warn); }
   .ws-console-line.info { color: var(--t4); }
   .ws-plot { max-width: 100%; border-radius: 8px; margin: 8px 0; border: 1px solid var(--line-soft); }
+  .ws-preview-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .ws-preview-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+  .ws-preview-console { flex: none; min-height: 32px; max-height: 88px; overflow: auto; padding: 6px 10px; border-top: 1px solid var(--line-soft); background: rgba(0,0,0,.16); }
+  .ws-resizer { flex: none; height: 8px; background: var(--line-soft); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); cursor: ns-resize; display: flex; align-items: center; justify-content: center; transition: background .15s; user-select: none; }
+  .ws-resizer:hover, .ws-resizer.dragging { background: rgba(100,255,160,.14); }
+  .ws-resizer::after { content: "⋯"; font-size: 8px; color: var(--t4); letter-spacing: 2px; line-height: 1; }
+  .ws-out-toggle { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--t3); font-size: 12px; }
+  .ws-out-toggle:hover { background: var(--panel-hover); color: var(--t1); }
+  /* context menu / modal / toast for explorer */
+  .ws-context-menu { position: fixed; z-index: 1000; min-width: 190px; background: #0e0f12; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 14px 44px rgba(0,0,0,.62); padding: 6px; display: flex; flex-direction: column; gap: 1px; }
+  .ws-context-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 10px; border-radius: 7px; font-size: 13px; color: var(--t2); text-align: left; }
+  .ws-context-menu button:hover { background: var(--panel-hover); color: var(--t1); }
+  .ws-context-menu button.danger { color: var(--danger); }
+  .ws-context-menu button.danger:hover { background: rgba(255,122,107,.12); }
+  .ws-context-menu .sep { height: 1px; background: var(--line-soft); margin: 4px -2px; }
+  .ws-context-menu .hint { font-size: 10px; color: var(--t4); padding: 2px 10px 4px; letter-spacing: .04em; text-transform: uppercase; }
+  .ws-modal-backdrop { position: fixed; inset: 0; z-index: 999; background: rgba(0,0,0,.56); backdrop-filter: blur(6px); display: grid; place-items: center; padding: 22px; animation: wsModalIn .18s ease; }
+  .ws-modal { width: min(440px, 100%); background: #0e0f12; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 64px rgba(0,0,0,.7); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .ws-modal h3 { font-size: 14px; font-weight: 600; color: var(--t1); }
+  .ws-modal p { font-size: 13px; color: var(--t2); line-height: 1.55; }
+  .ws-modal .path-preview { font-family: var(--mono); font-size: 12px; color: var(--t3); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 8px; padding: 7px 9px; word-break: break-all; }
+  .ws-modal input { width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; color: var(--t1); padding: 9px 10px; font-size: 13px; font-family: var(--mono); }
+  .ws-modal input:focus { outline: none; border-color: rgba(100,255,160,.42); }
+  .ws-modal input.invalid { border-color: var(--danger); }
+  .ws-modal-error { font-size: 12px; color: var(--danger); min-height: 14px; }
+  .ws-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+  @keyframes wsModalIn { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: scale(1); } }
+  .ws-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1001; background: #17181c; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; font-size: 13px; color: var(--t1); box-shadow: 0 10px 34px rgba(0,0,0,.55); display: flex; align-items: center; gap: 9px; max-width: min(440px, 92vw); animation: wsToastIn .22s ease; }
+  .ws-toast.error { border-color: rgba(255,122,107,.38); }
+  .ws-toast.success { border-color: rgba(100,255,160,.32); }
+  @keyframes wsToastIn { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
   .ws-pkg-input {
     width: 150px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
     color: var(--t1); padding: 5px 9px; font-size: 12px;
@@ -1367,9 +1423,16 @@
 
   /* code app: 3-pane layout + explorer + codemirror + harness */
   .ws-code-app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .ws-code-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 380px; }
+  .ws-code-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 6px var(--agent-width, 400px); }
   .ws-code-explorer-pane { border-right: 1px solid var(--line-soft); overflow: hidden; display: flex; flex-direction: column; }
-  .ws-code-center { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line-soft); }
+  .ws-code-center { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .ws-resizer-agent {
+    width: 6px; background: var(--line-soft); border-left: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft);
+    cursor: col-resize; display: flex; align-items: center; justify-content: center;
+    transition: background .15s; user-select: none; z-index: 10;
+  }
+  .ws-resizer-agent:hover, .ws-resizer-agent.dragging { background: rgba(100,255,160,.28); }
+  .ws-resizer-agent::after { content: "⋮"; font-size: 11px; color: var(--t4); line-height: 1; }
   .ws-code-agent { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,.01); }
   .ws-code-editor-wrap { flex: 1; min-height: 220px; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--line-soft); }
   .ws-code-editor-host { flex: 1; min-height: 0; overflow: auto; position: relative; }
@@ -1393,8 +1456,15 @@
   .ws-explorer-row:hover .ws-explorer-more { opacity: 1; }
   .ws-explorer-more:hover { background: var(--panel-hover); color: var(--t1); }
   /* agent pane */
-  .ws-code-agent .ws-thread-scroll { flex: 1; min-height: 0; }
+  .ws-code-agent .ws-thread-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
   .ws-code-agent .ws-thread { padding: 14px 14px 10px; gap: 14px; }
+
+  /* environment instruction feedback messages */
+  .msg.environment .bubble.environment { background: rgba(56,189,248,.05); border: 1px dashed rgba(56,189,248,.25); color: var(--t2); font-size: 12px; }
+  .ws-instruction-details summary { cursor: pointer; font-weight: 500; color: #7dd3fc; user-select: none; font-size: 11.5px; }
+  .ws-instruction-details summary:hover { color: #bae6fd; }
+  .ws-instruction-body { margin-top: 6px; padding: 8px 10px; background: rgba(0,0,0,.35); border-radius: 6px; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--t2); white-space: pre-wrap; word-break: break-word; max-height: 250px; overflow-y: auto; }
+
   .ws-agent-selection { border-top: 1px solid var(--line-soft); padding: 8px 10px; background: rgba(100,255,160,.04); flex: none; }
   .ws-agent-selection.pending { background: rgba(100,255,160,.08); border-top-color: rgba(100,255,160,.25); }
   .ws-selection-chip { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--t2); }
@@ -1405,13 +1475,18 @@
   .ws-tool-card { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 6px 0; background: #0a0b0e; }
   .ws-tool-card.ok { border-color: rgba(100,255,160,.25); }
   .ws-tool-card.err { border-color: rgba(255,122,107,.35); }
-  .ws-tool-head { padding: 6px 10px; font-size: 11px; background: var(--panel); border-bottom: 1px solid var(--line-soft); }
+  .ws-tool-head { padding: 6px 10px; font-size: 11.5px; background: var(--panel); border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; justify-content: space-between; }
+  .ws-tool-diff { padding: 6px 10px; font-size: 11px; border-bottom: 1px solid var(--line-soft); }
+  .ws-tool-diff summary { cursor: pointer; color: var(--t3); user-select: none; }
+  .ws-tool-diff summary:hover { color: var(--t1); }
+  .ws-tool-diff pre { margin: 6px 0 0; max-height: 180px; overflow: auto; padding: 6px 8px; background: rgba(0,0,0,.3); border-radius: 6px; }
   .ws-tool-args, .ws-tool-out { margin: 0; padding: 8px 10px; font-size: 11px; color: var(--t3); max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
   .ws-tool-out { border-top: 1px solid var(--line-soft); background: rgba(255,255,255,.02); }
   .ws-tool-pending { font-size: 11px; color: var(--t3); padding: 4px 0; }
   .ws-code-agent .ws-composer { flex-wrap: nowrap; padding: 10px; }
   .ws-code-agent .ws-composer textarea { min-height: 44px; }
   .ws-tab-del { margin-left: 6px; color: var(--t4); cursor: pointer; padding: 1px 4px; border-radius: 4px; }
+
   .ws-tab-del:hover { color: var(--danger); background: rgba(255,122,107,.12); }
   .ws-tab-label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -1427,6 +1502,23 @@
   .ws-pop-head { font-size: 11.5px; color: var(--t4); padding: 6px 10px 4px; }
   .ws-newfile-row { display: flex; gap: 6px; padding: 4px 8px 8px; }
   .ws-newfile-row input { flex: 1; }
+
+  /* harness v2: attachments, mentions, permission card, toggle */
+  .ws-auto-toggle { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--t2); cursor:pointer; -webkit-user-select:none; user-select:none; }
+  .ws-auto-toggle input { accent-color: var(--ok); width:14px; height:14px; }
+  .ws-attachments { border-top:1px solid var(--line-soft); padding:8px 10px; background:rgba(100,255,160,.04); flex:none; }
+  .ws-attachments-head { display:flex; align-items:center; justify-content:space-between; font-size:11px; color:var(--t3); margin-bottom:6px; }
+  .ws-attachments-list { display:flex; flex-wrap:wrap; gap:6px; }
+  .ws-attach-pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid rgba(100,255,160,.25); border-radius:999px; background:rgba(100,255,160,.08); font-size:11px; color:var(--t1); max-width:100%; }
+  .ws-attach-pill span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+  .ws-permission-card { border-top:1px solid rgba(255,205,107,.25); background:rgba(255,205,107,.06); padding:10px; flex:none; }
+  .ws-perm-head { display:flex; align-items:center; justify-content:space-between; font-size:11px; color:var(--t1); margin-bottom:6px; }
+  .ws-perm-body { font-size:11px; color:var(--t2); word-break:break-all; margin-bottom:6px; }
+  .ws-perm-diff { margin:0 0 8px; padding:8px 10px; background:#080a0c; border:1px solid var(--line-soft); border-radius:8px; font-size:11px; color:var(--t3); max-height:140px; overflow:auto; white-space:pre-wrap; }
+  .ws-perm-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+  .ws-mention-pop { position:absolute; left:10px; right:10px; bottom:56px; z-index:20; background:#0a0b0e; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.5); max-height:180px; overflow-y:auto; padding:4px; }
+  .ws-mention-item { display:block; width:100%; text-align:left; padding:6px 10px; border-radius:6px; font-size:12px; color:var(--t2); }
+  .ws-mention-item:hover, .ws-mention-item.active { background:var(--panel-hover); color:var(--t1); }
 
   /* ---------- responsive ---------- */
   @media (max-width: 900px) {
@@ -1521,6 +1613,18 @@
             <option value="65536">64K</option>
             <option value="131072">128K</option>
           </select>
+          <button class="ws-info-btn" id="contextInfoBtn" type="button" aria-label="What is context?" title="What is context?">i</button>
+        </label>
+        <label class="ws-context-control mono" title="Sampling temperature — controls creativity vs. determinism (shared across Chat, Research, Code & Reports)">
+          Temp
+          <select id="globalTemperature" aria-label="Global temperature">
+            <option value="0.2">0.2 · Precise</option>
+            <option value="0.4">0.4 · Focused</option>
+            <option value="0.7">0.7 · Balanced</option>
+            <option value="1.0">1.0 · Creative</option>
+            <option value="1.3">1.3 · Very creative</option>
+          </select>
+          <button class="ws-info-btn" id="temperatureInfoBtn" type="button" aria-label="What is temperature?" title="What is temperature?">i</button>
         </label>
         <span class="ws-storage mono" id="storageMeter" title="Local storage used by cached weights and your saved work — nothing is uploaded"></span>
         <label class="ws-toggle ws-top-toggle" for="thinkCheck" title="Reasoning mode — lets the model think step-by-step before answering, in every app">
@@ -1535,6 +1639,20 @@
       </div>
       <div class="bar" id="bar"><div></div></div>
     </header>
+    <div id="contextInfoPopover" class="ws-info-popover" hidden role="dialog" aria-label="What is context?">
+      <button class="ws-info-close" type="button" aria-label="Close">×</button>
+      <h4>Context window</h4>
+      <p>How much text the model can “see” at once — your prompt, chat history, and attached files all count toward it.</p>
+      <p><span class="mono">Auto</span> uses your device’s maximum (up to 128K tokens). Pick a smaller cap to save memory or keep replies faster on lower-end devices.</p>
+      <p class="mono">1 token ≈ ¾ of a word. 8K ≈ a few pages, 128K ≈ a small book.</p>
+    </div>
+    <div id="temperatureInfoPopover" class="ws-info-popover" hidden role="dialog" aria-label="What is temperature?">
+      <button class="ws-info-close" type="button" aria-label="Close">×</button>
+      <h4>Temperature</h4>
+      <p>Controls how creative vs. predictable the model is.</p>
+      <p><span class="mono">0.2 Precise</span> — deterministic, best for code &amp; facts.<br><span class="mono">0.7 Balanced</span> — good default for most tasks.<br><span class="mono">1.0–1.3 Creative</span> — more varied, surprising, but can be less accurate.</p>
+      <p class="mono">Lower = sticks to the most likely words. Higher = explores alternatives. On-device sampling is currently greedy — changes are subtle but noticeable over longer replies.</p>
+    </div>
 
     <main class="ws-views">
       <!-- CHAT -->
@@ -1674,8 +1792,9 @@
     import { modelService } from "./src/services/model-service.js";
     import { registerRoute, startRouter, currentRoute, navigate, DEFAULT_ROUTE } from "./src/shell/router.js";
     import { storageEstimate, formatBytes } from "./src/services/db.js";
-    import { getThinking, setThinking } from "./src/services/settings.js";
+    import { getThinking, setThinking, onThinking } from "./src/services/settings.js";
     import { getContextLimitPreference, setContextLimitPreference, onContextLimitChange } from "./src/services/context-preference.js";
+    import { getTemperaturePreferenceRaw, setTemperaturePreference, onTemperatureChange } from "./src/services/temperature-preference.js";
     import { chatApp } from "./apps/chat/app.js";
     import { researchApp } from "./apps/research/app.js";
     import { codeApp } from "./apps/code/app.js";
@@ -1771,6 +1890,59 @@
       });
     }
 
+    // ---------- global temperature (all apps) ----------
+    const globalTemperature = $("globalTemperature");
+    if (globalTemperature) {
+      globalTemperature.value = getTemperaturePreferenceRaw();
+      globalTemperature.addEventListener("change", () => {
+        setTemperaturePreference(globalTemperature.value);
+      });
+      onTemperatureChange((v) => {
+        const s = String(v);
+        if (globalTemperature.value !== s) globalTemperature.value = s;
+      });
+    }
+
+    // ---------- info popovers (context & temperature) ----------
+    function positionPopover(btn, popover) {
+      const r = btn.getBoundingClientRect();
+      const pad = 8;
+      let top = r.bottom + 8;
+      let left = r.left - 140;
+      // clamp to viewport
+      left = Math.max(pad, Math.min(left, window.innerWidth - 336));
+      if (top + 160 > window.innerHeight) top = Math.max(pad, r.top - 170);
+      popover.style.top = top + "px";
+      popover.style.left = left + "px";
+    }
+    function setupInfoPopover(btnId, popoverId) {
+      const btn = $(btnId);
+      const pop = $(popoverId);
+      if (!btn || !pop) return;
+      const closeBtn = pop.querySelector(".ws-info-close");
+      const open = () => {
+        // close the other popover
+        document.querySelectorAll(".ws-info-popover").forEach(p => { if (p !== pop) p.hidden = true; });
+        positionPopover(btn, pop);
+        pop.hidden = false;
+      };
+      const close = () => { pop.hidden = true; };
+      btn.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (pop.hidden) open(); else close();
+      });
+      closeBtn?.addEventListener("click", close);
+      document.addEventListener("click", (e) => {
+        if (pop.hidden) return;
+        if (pop.contains(e.target) || btn.contains(e.target)) return;
+        close();
+      });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+      window.addEventListener("resize", () => { if (!pop.hidden) positionPopover(btn, pop); });
+    }
+    setupInfoPopover("contextInfoBtn", "contextInfoPopover");
+    setupInfoPopover("temperatureInfoBtn", "temperatureInfoPopover");
+
     modelService.subscribe((s) => {
       statusEl.className = "status" + (s.status && s.status !== "idle" ? " " + s.status : "");
       const runtimeContext = s.capabilities?.effectiveContextMax;
@@ -1834,6 +2006,7 @@
     const thinkCheck = $("thinkCheck");
     thinkCheck.checked = getThinking();
     thinkCheck.addEventListener("change", () => setThinking(thinkCheck.checked));
+    onThinking((value) => { thinkCheck.checked = value; });
 
     // ---------- storage meter ----------
     async function refreshStorage() {

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Env / logs
+.env
+.env.*
+*.log
+npm-debug.log*
+
+# Build / cache
+dist/
+build/
+.cache/
+.parcel-cache/
+
+# Model weights — ~2.4 GB checkpoint fetched at runtime from Hugging Face Hub
+# and cached in IndexedDB. Optional offline copy lives at:
+#   models/google/gemma-4-E2B-it-qat-mobile-transformers/model.safetensors
+# See models/README.md — never commit the large binaries.
+# Keep models/README.md and models/.gitkeep tracked; ignore everything else
+# under models/ (weights, configs, tokenizer, etc. — all fetched/cached at runtime).
+models/**
+!models/README.md
+!models/.gitkeep
+
+# Safety net: ignore weight binaries anywhere in the repo
+*.safetensors
+*.safetensors.*
+*.bin
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.h5
