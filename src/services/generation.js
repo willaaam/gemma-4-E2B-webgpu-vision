@@ -94,12 +94,17 @@ export function generationStats({ startedAt, firstTokenAt, endedAt, generatedTok
 // Split the engine's token stream into thinking vs answer text using the
 // special soc/eoc token ids (the engine strips the literal delimiters).
 // Returns { run, result } where result resolves to { reply, thinkingText, answerText, stats }.
-export async function streamGeneration({ messages, maxNewTokens = null, contextMax, temperature = null, signal, onToken }) {
+export async function streamGeneration({ messages, maxNewTokens = null, contextMax, temperature = null, signal, stopSequences = [], onToken }) {
   const model = modelService.model;
   if (!model) throw new Error("Model not loaded");
   const preflight = await preflightGeneration({ messages, maxNewTokens, contextMax });
   const thoughtTokenIds = modelService.thoughtTokenIds;
   const effTemperature = Number.isFinite(Number(temperature)) ? Number(temperature) : getTemperaturePreference();
+  const stops = [...new Set((stopSequences || []).map(value => String(value || "")).filter(Boolean))];
+  const stopController = new AbortController();
+  const forwardAbort = () => stopController.abort();
+  if (signal?.aborted) stopController.abort();
+  else signal?.addEventListener?.("abort", forwardAbort, { once: true });
 
   let reply = "";
   let thinkingText = "";
@@ -110,12 +115,18 @@ export async function streamGeneration({ messages, maxNewTokens = null, contextM
   let generatedTokens = 0;
 
   try {
-    const stream = model.generate(messages, { maxNewTokens: preflight.maxNewTokens, temperature: effTemperature, signal });
+    const stream = model.generate(messages, {
+      maxNewTokens: preflight.maxNewTokens,
+      temperature: effTemperature,
+      signal: stopController.signal,
+      stopSequences: stops,
+    });
     for await (const { text: full, token, delta } of stream) {
       const now = performance.now();
       if (!firstTokenAt) firstTokenAt = now;
       generatedTokens++;
-      reply = full;
+      const previousReply = reply;
+      reply = String(full ?? reply);
       // The engine strips the thought-block delimiters (<|channel> / <channel|>)
       // from the decoded text, so split on the token stream instead: the soc token
       // opens the thought block, the eoc token closes it.
@@ -127,12 +138,26 @@ export async function streamGeneration({ messages, maxNewTokens = null, contextM
           else answerText += delta;
         }
       }
-      if (onToken) onToken({ full, delta, thinkingText, answerText, startedAt, firstTokenAt, now, generatedTokens });
+      const stop = findStop(reply, stops);
+      if (stop) {
+        const visibleReply = reply.slice(0, stop.index + stop.sequence.length);
+        const answerStop = findStop(answerText, stops);
+        if (answerStop) answerText = answerText.slice(0, answerStop.index + answerStop.sequence.length);
+        const visibleDelta = visibleReply.startsWith(previousReply)
+          ? visibleReply.slice(previousReply.length)
+          : delta;
+        reply = visibleReply;
+        onToken?.({ full: visibleReply, delta: visibleDelta, thinkingText, answerText, startedAt, firstTokenAt, now, generatedTokens });
+        stopController.abort();
+        break;
+      }
+      if (onToken) onToken({ full: reply, delta, thinkingText, answerText, startedAt, firstTokenAt, now, generatedTokens });
     }
   } catch (error) {
     modelService.refreshCapabilities?.();
     throw error;
   } finally {
+    signal?.removeEventListener?.("abort", forwardAbort);
     modelService.refreshCapabilities?.();
   }
   return {
@@ -144,15 +169,26 @@ export async function streamGeneration({ messages, maxNewTokens = null, contextM
   };
 }
 
+function findStop(text, stops) {
+  const source = String(text || "");
+  let found = null;
+  for (const sequence of stops) {
+    const index = source.indexOf(sequence);
+    if (index < 0) continue;
+    if (!found || index < found.index) found = { index, sequence };
+  }
+  return found;
+}
+
 // Convenience: run a full completion under the global lock.
 // onToken receives incremental updates for live rendering.
 // Pass skipLock:true when the CALLER already holds the lock (e.g. the agent
 // loop inside an app that acquired it) — otherwise re-acquiring throws "busy".
-export async function complete({ messages, maxNewTokens = null, contextMax, temperature = null, signal, owner = "app", onToken, skipLock = false }) {
+export async function complete({ messages, maxNewTokens = null, contextMax, temperature = null, signal, stopSequences = [], owner = "app", onToken, skipLock = false }) {
   const unlock = skipLock ? null : acquireLock(owner);
   if (!skipLock && !unlock) throw new Error("busy");
   try {
-    return await streamGeneration({ messages, maxNewTokens, contextMax, temperature, signal, onToken });
+    return await streamGeneration({ messages, maxNewTokens, contextMax, temperature, signal, stopSequences, onToken });
   } finally {
     unlock?.();
   }

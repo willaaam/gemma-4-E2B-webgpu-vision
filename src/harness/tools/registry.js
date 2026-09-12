@@ -1,8 +1,8 @@
-// Tool registry — lightweight Opencode pattern + Gemma 4 compatible.
+// Local execution adapters used by the task-list agent controller.
 // Each tool: { name, description, argsHint, permission, validate, execute }
 
 import { applyUnifiedPatch, computeDiffPreview } from "../diff.js";
-import { sanitizeFileContent } from "../parser.js";
+import { formatCompactTools, sanitizeFileContent } from "../../agent/protocol.js";
 
 export function defineTool(spec) {
   return {
@@ -15,24 +15,8 @@ export function defineTool(spec) {
   };
 }
 
-function toArgHint(args) {
-  return Object.entries(args || {}).map(([k, ty]) => `${k}: ${ty}`).join(", ");
-}
-
 export function toolSpecPrompt(tools) {
-  return tools.map(t => {
-    const entries = Object.entries(t.args || {});
-    const properties = entries.map(([key, typeHint]) => {
-      const type = String(typeHint).replace(/\?$/, "").toUpperCase();
-      return `${key}:{description:<|"|>${key} parameter<|"|>,type:<|"|>${type}<|"|>}`;
-    }).join(",");
-    const required = entries
-      .filter(([, typeHint]) => !String(typeHint).endsWith("?"))
-      .map(([key]) => `<|"|>${key}<|"|>`)
-      .join(",");
-    const requiredPart = required ? `,required:[${required}]` : "";
-    return `declaration:${t.name}{description:<|"|>${t.description}<|"|>,parameters:{properties:{${properties}}${requiredPart},type:<|"|>OBJECT<|"|>}}`;
-  }).join("\n");
+  return formatCompactTools(tools);
 }
 
 
@@ -197,7 +181,7 @@ export function createTools({ project, executors }) {
 
     defineTool({
       name: "run_python",
-      description: "Execute or verify a Python file. Returns stdout/stderr/error. Safe verification mode runs without blocking interactive games.",
+      description: "Execute or verify a Python file. Returns stdout/stderr/error. Safe verification mode prevents blocking on interactive input.",
       args: { path: "string?", code: "string?" },
       permission: "ask",
       validate: () => true,

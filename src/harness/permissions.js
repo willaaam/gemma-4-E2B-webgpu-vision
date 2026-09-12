@@ -2,7 +2,7 @@
 // Toggle key: ws-code-auto-approve  ("1" = auto, "0" = ask)
 //   - auto: read/search/list always auto; write/patch/mkdir/delete/run also auto
 //   - ask (default? toggle decides): write/patch/mkdir/delete/run require explicit allow
-// The toggle is exposed in the Agent pane header; harness checks getAutoApprove() each call.
+// The toggle is exposed in the Agent pane header; the controller checks it per call.
 
 const TOGGLE_KEY = "ws-code-auto-approve";
 const ASK_KEY = "ws-code-ask-dismissed"; // not used but reserved

@@ -48,9 +48,9 @@ The chat page became a multi-app, fully on-device **AI workstation**.
   imports from the Pyodide distribution; matplotlib figures captured as PNGs;
   micropip installs any pure-Python package from PyPI) and a sandboxed
   HTML/CSS/JS live preview (`srcdoc` iframe without same-origin, console
-  bridge via postMessage). AI builder runs a generate → execute → observe
-  agent loop (`src/lib/agent-loop.js`) that feeds runtime output back to the
-  model for up to three self-correction rounds.
+  bridge via postMessage). AI builder uses the task-list controller
+  (`src/agent/controller.js`) to assign one bounded task at a time and feed
+  runtime output back to the model for self-correction.
 - **Reports app** — staged generation tuned for greedy decoding (strict JSON
   outline → bounded per-section completions), charts emitted as JSON specs and
   rendered by Chart.js with a model-driven "fix" loop for invalid specs, saved

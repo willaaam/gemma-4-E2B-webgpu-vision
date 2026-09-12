@@ -20,8 +20,8 @@ async function loadCM() {
         { css },
         { oneDark }
       ] = await Promise.all([
-        import("https://esm.sh/@codemirror/view@6.43.9"),
-        import("https://esm.sh/@codemirror/state@6.7.1"),
+        import("https://esm.sh/@codemirror/view@6.43.10"),
+        import("https://esm.sh/@codemirror/state@6.7.2"),
         import("https://esm.sh/@codemirror/commands@6.11.0"),
         import("https://esm.sh/@codemirror/language@6.12.4"),
         import("https://esm.sh/@codemirror/autocomplete@6.20.3"),

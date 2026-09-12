@@ -1421,7 +1421,7 @@
   .ws-top-toggle { color: var(--t2); padding: 4px 8px; border-radius: 7px; }
   .ws-top-toggle:hover { background: var(--panel); }
 
-  /* code app: 3-pane layout + explorer + codemirror + harness */
+  /* code app: 3-pane layout + explorer + codemirror + agent */
   .ws-code-app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .ws-code-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr 6px var(--agent-width, 400px); }
   .ws-code-explorer-pane { border-right: 1px solid var(--line-soft); overflow: hidden; display: flex; flex-direction: column; }
@@ -1434,6 +1434,15 @@
   .ws-resizer-agent:hover, .ws-resizer-agent.dragging { background: rgba(100,255,160,.28); }
   .ws-resizer-agent::after { content: "⋮"; font-size: 11px; color: var(--t4); line-height: 1; }
   .ws-code-agent { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: rgba(255,255,255,.01); }
+  .ws-right-pane-tabs { display:flex; gap:2px; padding:0; flex:none; }
+  .ws-right-pane-tab { appearance:none; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--t4); padding:8px 12px 7px; font:600 11px/1 var(--mono); cursor:pointer; }
+  .ws-right-pane-tab:hover { color:var(--t1); background:rgba(255,255,255,.03); }
+  .ws-right-pane-tab.active { color:var(--t1); border-bottom-color:var(--accent); }
+  .ws-right-pane-tab:disabled { cursor:default; opacity:.55; }
+  .ws-right-panel { flex:1; min-height:0; display:flex; flex-direction:column; }
+  .ws-right-panel[hidden] { display:none !important; }
+  .ws-chat-clear { margin-left:auto; }
+  .ws-agent-toolbar { display:flex; align-items:center; justify-content:flex-end; gap:6px; padding:7px 10px; border-bottom:1px solid var(--line-soft); flex:none; flex-wrap:wrap; }
   .ws-code-editor-wrap { flex: 1; min-height: 220px; display: flex; flex-direction: column; overflow: hidden; border-bottom: 1px solid var(--line-soft); }
   .ws-code-editor-host { flex: 1; min-height: 0; overflow: auto; position: relative; }
   .ws-code-editor-host .cm-editor { height: 100%; }
@@ -1482,6 +1491,11 @@
   .ws-tool-diff pre { margin: 6px 0 0; max-height: 180px; overflow: auto; padding: 6px 8px; background: rgba(0,0,0,.3); border-radius: 6px; }
   .ws-tool-args, .ws-tool-out { margin: 0; padding: 8px 10px; font-size: 11px; color: var(--t3); max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
   .ws-tool-out { border-top: 1px solid var(--line-soft); background: rgba(255,255,255,.02); }
+  .ws-tool-out > :first-child { margin-top: 0; }
+  .ws-tool-out > :last-child { margin-bottom: 0; }
+  .ws-tool-out p { margin: 0 0 6px; }
+  .ws-tool-out pre { margin: 6px 0 0; max-height: 140px; overflow: auto; padding: 6px 8px; background: rgba(0,0,0,.3); white-space: pre; word-break: normal; }
+  .ws-tool-out pre code { background: none; border: 0; padding: 0; }
   .ws-tool-pending { font-size: 11px; color: var(--t3); padding: 4px 0; }
   .ws-code-agent .ws-composer { flex-wrap: nowrap; padding: 10px; }
   .ws-code-agent .ws-composer textarea { min-height: 44px; }
@@ -1503,7 +1517,7 @@
   .ws-newfile-row { display: flex; gap: 6px; padding: 4px 8px 8px; }
   .ws-newfile-row input { flex: 1; }
 
-  /* harness v2: attachments, mentions, permission card, toggle */
+  /* agent pane: attachments, mentions, permission card, toggle */
   .ws-auto-toggle { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--t2); cursor:pointer; -webkit-user-select:none; user-select:none; }
   .ws-auto-toggle input { accent-color: var(--ok); width:14px; height:14px; }
   .ws-attachments { border-top:1px solid var(--line-soft); padding:8px 10px; background:rgba(100,255,160,.04); flex:none; }
@@ -1511,11 +1525,22 @@
   .ws-attachments-list { display:flex; flex-wrap:wrap; gap:6px; }
   .ws-attach-pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid rgba(100,255,160,.25); border-radius:999px; background:rgba(100,255,160,.08); font-size:11px; color:var(--t1); max-width:100%; }
   .ws-attach-pill span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
-  .ws-permission-card { border-top:1px solid rgba(255,205,107,.25); background:rgba(255,205,107,.06); padding:10px; flex:none; }
+  .ws-image-attachment { border-top:1px solid var(--line-soft); padding:8px 10px 0; background:rgba(56,189,248,.035); flex:none; }
+  .ws-image-chip { display:inline-flex; align-items:center; gap:8px; max-width:100%; padding:4px 6px 4px 4px; border:1px solid rgba(56,189,248,.3); border-radius:8px; background:rgba(56,189,248,.08); color:var(--t2); font-size:11px; }
+  .ws-image-chip img { width:34px; height:34px; object-fit:cover; border-radius:5px; display:block; }
+  .ws-image-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+  .ws-permission-card { border-top:1px solid rgba(255,205,107,.25); background:rgba(255,205,107,.06); padding:10px; flex:none; min-width:0; max-width:100%; box-sizing:border-box; overflow:hidden; }
   .ws-perm-head { display:flex; align-items:center; justify-content:space-between; font-size:11px; color:var(--t1); margin-bottom:6px; }
-  .ws-perm-body { font-size:11px; color:var(--t2); word-break:break-all; margin-bottom:6px; }
-  .ws-perm-diff { margin:0 0 8px; padding:8px 10px; background:#080a0c; border:1px solid var(--line-soft); border-radius:8px; font-size:11px; color:var(--t3); max-height:140px; overflow:auto; white-space:pre-wrap; }
+  .ws-perm-body { font-size:11px; color:var(--t2); word-break:break-all; margin-bottom:6px; max-height:72px; overflow:auto; white-space:pre-wrap; }
+  .ws-perm-diff { margin:0 0 8px; padding:8px 10px; background:#080a0c; border:1px solid var(--line-soft); border-radius:8px; font-size:11px; color:var(--t3); max-height:140px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
   .ws-perm-actions { display:flex; gap:6px; justify-content:flex-end; flex-wrap:wrap; }
+  .ws-perm-actions .ws-btn { min-width:0; max-width:100%; white-space:normal; }
+  .ws-human-card { border-top:1px solid rgba(56,189,248,.3); background:rgba(56,189,248,.08); padding:10px; flex:none; }
+  .ws-human-head { font-size:11px; color:#7dd3fc; margin-bottom:6px; }
+  .ws-human-question { color:var(--t2); font-size:11.5px; line-height:1.45; white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
+  .ws-human-input { display:block; width:100%; min-height:44px; resize:vertical; box-sizing:border-box; padding:7px 8px; border:1px solid rgba(56,189,248,.3); border-radius:6px; background:rgba(0,0,0,.25); color:var(--t1); font:11.5px/1.4 var(--mono); outline:none; }
+  .ws-human-input:focus { border-color:rgba(56,189,248,.7); box-shadow:0 0 0 2px rgba(56,189,248,.12); }
+  .ws-human-actions { display:flex; justify-content:flex-end; margin-top:7px; }
   .ws-mention-pop { position:absolute; left:10px; right:10px; bottom:56px; z-index:20; background:#0a0b0e; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,.5); max-height:180px; overflow-y:auto; padding:4px; }
   .ws-mention-item { display:block; width:100%; text-align:left; padding:6px 10px; border-radius:6px; font-size:12px; color:var(--t2); }
   .ws-mention-item:hover, .ws-mention-item.active { background:var(--panel-hover); color:var(--t1); }
@@ -1603,7 +1628,7 @@
         <a href="#/reports" data-route="reports">Reports</a>
       </nav>
       <div class="ws-top-actions">
-        <label class="ws-context-control mono" title="Context window cap — shared across Chat, Research, Code & Reports (Auto = device maximum)">
+        <span class="ws-context-control mono" title="Context window cap — shared across Chat, Research, Code & Reports (Auto = device maximum)">
           Context
           <select id="globalContextLimit" aria-label="Global context limit">
             <option value="auto">Auto</option>
@@ -1614,8 +1639,8 @@
             <option value="131072">128K</option>
           </select>
           <button class="ws-info-btn" id="contextInfoBtn" type="button" aria-label="What is context?" title="What is context?">i</button>
-        </label>
-        <label class="ws-context-control mono" title="Sampling temperature — controls creativity vs. determinism (shared across Chat, Research, Code & Reports)">
+        </span>
+        <span class="ws-context-control mono" title="Sampling temperature — controls creativity vs. determinism (shared across Chat, Research, Code & Reports)">
           Temp
           <select id="globalTemperature" aria-label="Global temperature">
             <option value="0.2">0.2 · Precise</option>
@@ -1625,7 +1650,7 @@
             <option value="1.3">1.3 · Very creative</option>
           </select>
           <button class="ws-info-btn" id="temperatureInfoBtn" type="button" aria-label="What is temperature?" title="What is temperature?">i</button>
-        </label>
+        </span>
         <span class="ws-storage mono" id="storageMeter" title="Local storage used by cached weights and your saved work — nothing is uploaded"></span>
         <label class="ws-toggle ws-top-toggle" for="thinkCheck" title="Reasoning mode — lets the model think step-by-step before answering, in every app">
           <input type="checkbox" id="thinkCheck" checked>
@@ -1898,7 +1923,7 @@
         setTemperaturePreference(globalTemperature.value);
       });
       onTemperatureChange((v) => {
-        const s = String(v);
+        const s = Number(v).toFixed(1);
         if (globalTemperature.value !== s) globalTemperature.value = s;
       });
     }

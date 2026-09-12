@@ -7,13 +7,17 @@ export const DEFAULT_TEMPERATURE = 0.7;
 
 const listeners = new Set();
 
+function formatTemp(n) {
+  return Number(n).toFixed(1);
+}
+
 function readRaw() {
   try {
     const v = localStorage.getItem(TEMPERATURE_KEY);
-    if (v == null) return String(DEFAULT_TEMPERATURE);
+    if (v == null) return formatTemp(DEFAULT_TEMPERATURE);
     const n = Number(v);
-    return TEMPERATURE_OPTIONS.includes(n) ? String(n) : String(DEFAULT_TEMPERATURE);
-  } catch { return String(DEFAULT_TEMPERATURE); }
+    return TEMPERATURE_OPTIONS.includes(n) ? formatTemp(n) : formatTemp(DEFAULT_TEMPERATURE);
+  } catch { return formatTemp(DEFAULT_TEMPERATURE); }
 }
 
 let current = readRaw();
@@ -29,7 +33,7 @@ export function getTemperaturePreferenceRaw() {
 
 export function setTemperaturePreference(value) {
   const n = Number(value);
-  const next = TEMPERATURE_OPTIONS.includes(n) ? String(n) : String(DEFAULT_TEMPERATURE);
+  const next = TEMPERATURE_OPTIONS.includes(n) ? formatTemp(n) : formatTemp(DEFAULT_TEMPERATURE);
   current = next;
   try { localStorage.setItem(TEMPERATURE_KEY, next); } catch {}
   for (const fn of listeners) fn(Number(next));
@@ -42,8 +46,8 @@ export function onTemperatureChange(fn) {
 
 export function temperatureLabel(value) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return String(DEFAULT_TEMPERATURE);
-  return n.toFixed(1);
+  if (!Number.isFinite(n)) return formatTemp(DEFAULT_TEMPERATURE);
+  return formatTemp(n);
 }
 
 export function temperatureHint(value) {

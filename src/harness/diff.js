@@ -1,4 +1,4 @@
-// Minimal diff & patch apply util for the harness.
+// Minimal diff and patch application used by local agent execution adapters.
 // Opencode-inspired but dependency-free. Computes a simple line-based preview diff
 // and applies unified-hunk patches without requiring exact line numbers.
 

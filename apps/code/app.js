@@ -1,15 +1,15 @@
-// Agentic coding workstation — Explorer + CodeMirror + Harness (v2).
-// Pi-lightweight loop + Opencode registry/permissions/attachments/mentions.
+// Agentic coding workstation — Explorer + CodeMirror + task-list controller.
+// The controller owns planning and execution; this module owns the Code UI.
 // Explorer right-click → Explain/Fix/Add; @-mentions autocomplete; Auto-approve toggle; undo stack.
 
 import { modelService } from "../../src/services/model-service.js";
-import { acquireLock } from "../../src/services/generation.js";
+import { acquireLock, streamGeneration } from "../../src/services/generation.js";
 import { renderMarkdown, escapeHtml } from "../../src/lib/markdown.js";
 import { createChatThread } from "../../src/lib/chat-thread.js";
 import { loadProject, saveProject, resetProject, normalizePathExport, dirname, basename } from "../../src/services/code-project.js";
 import { createEditor } from "./components/editor-cm.js";
 import { createExplorer } from "./components/explorer.js";
-import { runHarness } from "../../src/harness/harness.js";
+import { runAgent } from "../../src/agent/controller.js";
 import { getAutoApprove, setAutoApprove, onAutoApproveChange } from "../../src/harness/permissions.js";
 import { computeDiffPreview } from "../../src/harness/diff.js";
 import {
@@ -19,8 +19,8 @@ import {
 import { WebRunner } from "./runners/web-runner.js";
 import { chunkText, BM25Index } from "../../src/services/context.js";
 import { getContextLimitPreference, setContextLimitPreference, selectedContextLimit, onContextLimitChange } from "../../src/services/context-preference.js";
-import { getThinking, setThinking } from "../../src/services/settings.js";
-import { cleanProse } from "../../src/harness/parser.js";
+import { getThinking, setThinking, thinkMessages } from "../../src/services/settings.js";
+import { cleanForDisplay as cleanProse } from "../../src/agent/protocol.js";
 
 
 let els = {};
@@ -31,8 +31,10 @@ let activePath = null;
 let openTabs = [];
 // Attachments: array of {path,text} from selections, @-mentions, file Add-to-Agent
 let attachments = [];
+let pendingImage = null;
+let pendingImageRead = 0;
 let currentSelection = null; // live selection {text,path,from,to}
-let harnessMessages = [];
+let agentHistory = [];
 let generating = false;
 let abortController = null;
 let unsubModel = null;
@@ -46,9 +48,30 @@ let outCollapsed = false;
 let editorSetting = false;
 let undoStack = []; // [{before, after, at, call}] history stack per mutation
 let mentionState = null; // {query, start, end}
+let chatHistory = [];
+let chatThreadView = null;
+let rightPaneMode = "agent";
 const OUT_HEIGHT_KEY = "ws-code-out-height";
 const OUT_COLLAPSED_KEY = "ws-code-out-collapsed";
+const AGENTIC_MODE_KEY = "ws-agentic-mode";
+const RIGHT_PANE_MODE_KEY = "ws-code-right-pane-mode";
 const CODE_MIN_CONTEXT_TOKENS = 32_768;
+
+function getAgenticMode() {
+  try { return localStorage.getItem(AGENTIC_MODE_KEY) !== "0"; } catch { return true; }
+}
+
+function setAgenticMode(value) {
+  try { localStorage.setItem(AGENTIC_MODE_KEY, value ? "1" : "0"); } catch {}
+}
+
+function getRightPaneMode() {
+  try { return localStorage.getItem(RIGHT_PANE_MODE_KEY) === "chat" ? "chat" : "agent"; } catch { return "agent"; }
+}
+
+function setRightPaneModePreference(value) {
+  try { localStorage.setItem(RIGHT_PANE_MODE_KEY, value); } catch {}
+}
 
 function showAppToast(message, type = "info") {
   let host = document.querySelector(".ws-toast-host");
@@ -103,7 +126,11 @@ export const codeApp = {
     pythonLogs = [];
     webLogs = [];
     undoStack = [];
+    chatHistory = [];
+    rightPaneMode = getRightPaneMode();
     attachments = [];
+    pendingImage = null;
+    pendingImageRead = 0;
     mentionState = null;
     buildDom(container);
     runner = new WebRunner(els.previewFrame, { onConsole: (level, text) => pushConsole(level, text, "web") });
@@ -113,6 +140,10 @@ export const codeApp = {
     if (els.autoApproveToggle) {
       els.autoApproveToggle.checked = getAutoApprove();
       els.autoApproveToggle.addEventListener("change", () => setAutoApprove(els.autoApproveToggle.checked));
+    }
+    if (els.agenticModeToggle) {
+      els.agenticModeToggle.checked = getAgenticMode();
+      els.agenticModeToggle.addEventListener("change", () => setAgenticMode(els.agenticModeToggle.checked));
     }
     // also listen for external toggle changes
     const unsubAuto = onAutoApproveChange((v) => { if (els.autoApproveToggle) els.autoApproveToggle.checked = !!v; updateUndoUI(); });
@@ -177,8 +208,9 @@ export const codeApp = {
           }
           openTabs = [];
           activePath = null;
-          harnessMessages = [];
+          agentHistory = [];
           attachments = [];
+          clearPendingImage();
           currentSelection = null;
           undoStack = [];
           clearAgentThread();
@@ -221,6 +253,7 @@ export const codeApp = {
 
   unmount() {
     abortController?.abort();
+    cancelHumanResponse();
     unsubModel?.(); unsubModel = null;
     unsubContext?.(); unsubContext = null;
     try { els._unsubAuto?.(); } catch {}
@@ -265,14 +298,14 @@ function buildDom(root) {
             </div>
           </div>
           <div class="ws-console-container" data-role="consoleContainer" style="display:flex; flex-direction:column; height:calc(100% - 38px)">
-            <pre class="ws-console mono" data-role="console" style="flex:1; margin:0" tabindex="0" title="Click here or the input bar below to send keyboard commands to Python"></pre>
+            <pre class="ws-console mono" data-role="console" style="flex:1; margin:0" tabindex="0" title="Click here or the input bar below to send input to Python"></pre>
             <div class="ws-console-input-row mono" data-role="consoleInputRow" style="display:flex; align-items:center; gap:6px; padding:4px 8px; border-top:1px solid var(--line-soft); background:rgba(0,0,0,0.15)">
 
-              <label class="mono" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--t3); cursor:pointer; user-select:none" title="When enabled, every keypress (WASD, Arrow keys, Space, etc.) is sent directly to Python stdin in real-time">
+              <label class="mono" style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--t3); cursor:pointer; user-select:none" title="When enabled, printable keypresses are sent directly to Python stdin in real-time">
                 <input type="checkbox" data-role="liveKeysToggle" style="margin:0; cursor:pointer;" checked />
-                <span>🕹️ Live keys</span>
+                <span>Live input</span>
               </label>
-              <input type="text" class="ws-console-input mono" data-role="consoleInput" placeholder="Send input to Python stdin (type here, or use Arrow keys / WASD for game controls)..." style="flex:1; background:transparent; border:none; outline:none; color:var(--t1); font-size:12px;" />
+              <input type="text" class="ws-console-input mono" data-role="consoleInput" placeholder="Send input to Python stdin..." style="flex:1; background:transparent; border:none; outline:none; color:var(--t1); font-size:12px;" />
               <button class="ws-btn ghost tiny" data-role="sendConsoleInput">Send</button>
             </div>
           </div>
@@ -286,16 +319,25 @@ function buildDom(root) {
       <section class="ws-pane ws-code-agent ws-pane-right" data-role="agentPane">
 
         <div class="ws-pane-head">
-          <h3>Agent</h3>
-          <div class="ws-head-actions" style="gap:6px; flex-wrap:wrap">
-            <label class="ws-auto-toggle mono" title="Auto-approve file edits & runs without asking">
-              <input type="checkbox" data-role="autoApproveToggle" />
-              <span>Auto-approve</span>
-            </label>
-            <button class="ws-btn ghost small" data-role="undoBtn" title="Undo last file change (history stack)">↩ Undo</button>
-            <button class="ws-btn ghost small" data-role="newSession">New</button>
-            <button class="ws-btn ghost small" data-role="clearAgent">Clear</button>
+          <div class="ws-right-pane-tabs" role="tablist" aria-label="Right pane mode">
+            <button class="ws-right-pane-tab" data-role="rightPaneTab" data-mode="chat" role="tab" type="button">Chat</button>
+            <button class="ws-right-pane-tab active" data-role="rightPaneTab" data-mode="agent" role="tab" type="button">Agent</button>
           </div>
+          <button class="ws-btn ghost tiny ws-chat-clear" data-role="clearChat" aria-label="Clear chat" title="Clear chat">× Clear</button>
+        </div>
+        <div class="ws-right-panel" data-role="agentPanel">
+        <div class="ws-agent-toolbar" data-role="agentHeaderActions">
+          <label class="ws-auto-toggle mono" title="Auto-approve file edits & runs without asking">
+            <input type="checkbox" data-role="autoApproveToggle" />
+            <span>Auto-approve</span>
+          </label>
+          <label class="ws-auto-toggle mono" title="When enabled, the agent continues without waiting for guidance">
+            <input type="checkbox" data-role="agenticModeToggle" />
+            <span>Agentic mode</span>
+          </label>
+          <button class="ws-btn ghost small" data-role="undoBtn" title="Undo last file change (history stack)">↩ Undo</button>
+          <button class="ws-btn ghost small" data-role="newSession">New</button>
+          <button class="ws-btn ghost small" data-role="clearAgent">Clear</button>
         </div>
         <div class="ws-task-list mono" data-role="taskList" hidden style="margin:8px 10px 0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,0.25); border:1px solid var(--line-soft); font-size:11.5px;"></div>
         <div class="ws-thread-scroll" data-role="agentScroll"><div class="ws-thread" data-role="agentThread">
@@ -320,14 +362,34 @@ function buildDom(root) {
             <button class="ws-btn primary small" data-role="permAllowAlways">Allow & don't ask again</button>
           </div>
         </div>
+        <div class="ws-human-card" data-role="humanCard" hidden>
+          <div class="ws-human-head mono"><span data-role="humanTitle">Agent needs guidance</span></div>
+          <div class="ws-human-question mono" data-role="humanQuestion"></div>
+          <textarea class="ws-human-input mono" data-role="humanInput" rows="2" placeholder="Answer the agent…"></textarea>
+          <div class="ws-human-actions"><button class="ws-btn primary small" data-role="humanSubmit">Send guidance</button></div>
+        </div>
         <div class="ws-agent-context mono" data-role="agentContext" title="Current file-context budget (based on top-bar cap + model limits)"></div>
+        <div class="ws-image-attachment" data-role="agentImageAttachment" hidden></div>
         <footer class="ws-composer" style="position:relative">
-          <textarea data-role="agentInput" rows="2" placeholder="Load the model first, then describe a task… (use @ to mention files)"></textarea>
+          <textarea data-role="agentInput" rows="2" placeholder="Load the model first, then describe a task… (use @ to mention files; paste an image)"></textarea>
           <div class="ws-mention-pop" data-role="mentionPop" hidden></div>
           <button class="ws-btn primary" data-role="sendAgent" disabled>Send</button>
           <button class="ws-btn danger" data-role="stopAgent" hidden>Stop</button>
         </footer>
         <div class="ws-agent-status mono" data-role="agentStatus"></div>
+        </div>
+        <div class="ws-right-panel" data-role="chatPanel" hidden>
+          <div class="ws-thread-scroll" data-role="chatScroll"><div class="ws-thread" data-role="chatThread">
+            <div class="ws-empty">Ask Gemma a question without changing project files.</div>
+          </div></div>
+          <div class="ws-image-attachment" data-role="chatImageAttachment" hidden></div>
+          <footer class="ws-composer" style="position:relative">
+            <textarea data-role="chatInput" rows="2" placeholder="Ask Gemma anything… (paste an image)"></textarea>
+            <button class="ws-btn primary small" data-role="sendChat" disabled>Send</button>
+            <button class="ws-btn danger small" data-role="stopChat" hidden>Stop</button>
+          </footer>
+          <div class="ws-agent-status mono" data-role="chatStatus"></div>
+        </div>
       </section>
     </div>
   `;
@@ -372,6 +434,18 @@ function buildDom(root) {
     newSession: wrap.querySelector('[data-role="newSession"]'),
     clearAgent: wrap.querySelector('[data-role="clearAgent"]'),
     autoApproveToggle: wrap.querySelector('[data-role="autoApproveToggle"]'),
+    agenticModeToggle: wrap.querySelector('[data-role="agenticModeToggle"]'),
+    agentHeaderActions: wrap.querySelector('[data-role="agentHeaderActions"]'),
+    rightPaneTabs: wrap.querySelectorAll('[data-role="rightPaneTab"]'),
+    agentPanel: wrap.querySelector('[data-role="agentPanel"]'),
+    chatPanel: wrap.querySelector('[data-role="chatPanel"]'),
+    chatScroll: wrap.querySelector('[data-role="chatScroll"]'),
+    chatThread: wrap.querySelector('[data-role="chatThread"]'),
+    chatInput: wrap.querySelector('[data-role="chatInput"]'),
+    sendChat: wrap.querySelector('[data-role="sendChat"]'),
+    stopChat: wrap.querySelector('[data-role="stopChat"]'),
+    clearChat: wrap.querySelector('[data-role="clearChat"]'),
+    chatStatus: wrap.querySelector('[data-role="chatStatus"]'),
     undoBtn: wrap.querySelector('[data-role="undoBtn"]'),
     attachmentsBar: wrap.querySelector('[data-role="attachmentsBar"]'),
     attachmentsList: wrap.querySelector('[data-role="attachmentsList"]'),
@@ -390,12 +464,22 @@ function buildDom(root) {
     permAllowOnce: wrap.querySelector('[data-role="permAllowOnce"]'),
     permAllowAlways: wrap.querySelector('[data-role="permAllowAlways"]'),
     permDismiss: wrap.querySelector('[data-role="permDismiss"]'),
+    humanCard: wrap.querySelector('[data-role="humanCard"]'),
+    humanTitle: wrap.querySelector('[data-role="humanTitle"]'),
+    humanQuestion: wrap.querySelector('[data-role="humanQuestion"]'),
+    humanInput: wrap.querySelector('[data-role="humanInput"]'),
+    humanSubmit: wrap.querySelector('[data-role="humanSubmit"]'),
     agentStatus: wrap.querySelector('[data-role="agentStatus"]'),
     agentContext: wrap.querySelector('[data-role="agentContext"]'),
+    agentImageAttachment: wrap.querySelector('[data-role="agentImageAttachment"]'),
+    chatImageAttachment: wrap.querySelector('[data-role="chatImageAttachment"]'),
   });
 
 
   threadView = createChatThread({ scrollEl: els.agentScroll, threadEl: els.agentThread, userLabel: "You", assistantLabel: "Agent" });
+  chatThreadView = createChatThread({ scrollEl: els.chatScroll, threadEl: els.chatThread, userLabel: "You", assistantLabel: "Gemma" });
+
+  setRightPaneMode(rightPaneMode, true);
 
   els.agentScroll.addEventListener("scroll", () => {
     const el = els.agentScroll;
@@ -423,17 +507,8 @@ function buildDom(root) {
   els.sendConsoleInput?.addEventListener("click", () => handleConsoleInput());
 
   const dispatchKeyCommand = (key) => {
-    const arrowMap = {
-      ArrowLeft: "a",
-      ArrowRight: "d",
-      ArrowUp: "w",
-      ArrowDown: "s",
-      Space: " ",
-      " ": " ",
-    };
-    const mapped = arrowMap[key] !== undefined ? arrowMap[key] : key;
-    queueStdin(mapped);
-    pushConsole("info", `[stdin key] ${key}${mapped !== key ? ` (${mapped})` : ""}`, "python");
+    queueStdin(key);
+    pushConsole("info", `[stdin key] ${key}`, "python");
   };
 
   const handleKeydownCapture = (e) => {
@@ -445,14 +520,7 @@ function buildDom(root) {
       return;
     }
 
-    // Always capture arrow keys and space
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "].includes(e.key)) {
-      e.preventDefault();
-      dispatchKeyCommand(e.key);
-      return;
-    }
-
-    // In Live Keys mode, capture single printable keys (WASD, q, r, numbers, etc.)
+    // In live input mode, capture single printable keys.
     if (els.liveKeysToggle?.checked && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault();
       dispatchKeyCommand(e.key);
@@ -477,36 +545,63 @@ function buildDom(root) {
 
 
   // agent composers
+  els.rightPaneTabs.forEach(tab => tab.addEventListener("click", () => setRightPaneMode(tab.dataset.mode)));
   els.sendAgent.addEventListener("click", () => sendToAgent());
-  els.stopAgent.addEventListener("click", () => abortController?.abort());
+  els.stopAgent.addEventListener("click", () => {
+    cancelHumanResponse();
+    abortController?.abort();
+  });
   els.agentInput.addEventListener("keydown", (e) => {
     if (handleMentionKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendAgent.disabled) sendToAgent(); }
   });
   els.agentInput.addEventListener("input", () => { syncState(); autoGrowAgent(); handleMentionInput(); });
+  els.agentInput.addEventListener("paste", handleImagePaste);
   els.agentInput.addEventListener("blur", () => setTimeout(hideMentionPop, 150));
   els.agentInput.addEventListener("click", () => handleMentionInput());
+  els.sendChat.addEventListener("click", () => sendToChat());
+  els.stopChat.addEventListener("click", () => abortController?.abort());
+  els.clearChat.addEventListener("click", () => {
+    abortController?.abort();
+    chatHistory = [];
+    els.chatThread.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "ws-empty";
+    empty.textContent = "Ask Gemma a question without changing project files.";
+    els.chatThread.appendChild(empty);
+    els.chatStatus.textContent = "Chat history cleared.";
+    els.sendChat.disabled = !modelService.ready;
+  });
+  els.chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendChat.disabled) sendToChat(); }
+  });
+  els.chatInput.addEventListener("input", () => { syncState(); autoGrowChat(); });
+  els.chatInput.addEventListener("paste", handleImagePaste);
   els.clearAgent.addEventListener("click", () => {
     abortController?.abort();
-    harnessMessages = [];
+    cancelHumanResponse();
+    agentHistory = [];
     undoStack = [];
     clearAgentThread();
     attachments = [];
+    clearPendingImage();
     renderAttachments();
     updateUndoUI();
     els.agentStatus.textContent = "Agent history and undo stack cleared.";
   });
   els.newSession.addEventListener("click", () => {
     abortController?.abort();
-    harnessMessages = [];
+    cancelHumanResponse();
+    agentHistory = [];
     undoStack = [];
     clearAgentThread();
     attachments = [];
+    clearPendingImage();
     renderAttachments();
     updateUndoUI();
     els.agentStatus.textContent = "New session — history and undo stack cleared.";
   });
-  els.clearAllAttach.addEventListener("click", () => { attachments = []; renderAttachments(); });
+  els.clearAllAttach.addEventListener("click", () => { attachments = []; clearPendingImage(); renderAttachments(); });
   els.undoBtn.addEventListener("click", () => doUndo());
   els.attachSel.addEventListener("click", () => {
     if (currentSelection?.text) {
@@ -526,9 +621,17 @@ function buildDom(root) {
   els.permDeny.addEventListener("click", () => hidePermissionCard("deny"));
   els.permAllowOnce.addEventListener("click", () => hidePermissionCard("allow"));
   els.permAllowAlways.addEventListener("click", () => hidePermissionCard("allow_always"));
+  els.humanSubmit.addEventListener("click", () => resolveHumanResponse(els.humanInput.value));
+  els.humanInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      resolveHumanResponse(els.humanInput.value);
+    }
+  });
 
   // selection bar initially hidden
   renderAttachments();
+  renderPendingImage();
   autoGrowAgent();
 
   // ----- bottom bar resizer / collapsible -----
@@ -679,6 +782,28 @@ function autoGrowAgent() {
   els.agentInput.style.height = Math.min(els.agentInput.scrollHeight, 140) + "px";
 }
 
+function autoGrowChat() {
+  els.chatInput.style.height = "auto";
+  els.chatInput.style.height = Math.min(els.chatInput.scrollHeight, 140) + "px";
+}
+
+function setRightPaneMode(mode, silent = false) {
+  if (generating && mode !== rightPaneMode) return;
+  rightPaneMode = mode === "chat" ? "chat" : "agent";
+  if (!silent) setRightPaneModePreference(rightPaneMode);
+  const chat = rightPaneMode === "chat";
+  els.agentHeaderActions.hidden = chat;
+  els.clearChat.hidden = !chat;
+  els.agentPanel.hidden = chat;
+  els.chatPanel.hidden = !chat;
+  els.rightPaneTabs.forEach(tab => {
+    const active = tab.dataset.mode === rightPaneMode;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  });
+  syncState();
+}
+
 let autoRun = true;
 
 function runnerForPath(path) {
@@ -695,9 +820,13 @@ function shouldAutoPreview() {
 
 function syncState() {
   const ready = modelService.ready;
-  const hasText = !!els.agentInput.value.trim() || attachments.length > 0;
-  els.sendAgent.disabled = !ready || generating || !hasText;
-  els.agentInput.placeholder = !ready ? "Load the model to talk to the agent… (use @ to mention files)" : activePath ? `Ask about ${activePath}… (@ to mention)` : "Describe a task… (@ to mention files)";
+  const chat = rightPaneMode === "chat";
+  const input = chat ? els.chatInput : els.agentInput;
+  const sendButton = chat ? els.sendChat : els.sendAgent;
+  const hasText = !!input.value.trim() || !!pendingImage || (!chat && attachments.length > 0);
+  sendButton.disabled = !ready || generating || !hasText;
+  els.agentInput.placeholder = !ready ? "Load the model to talk to the agent… (use @ to mention files; paste an image)" : activePath ? `Ask about ${activePath}… (@ to mention; paste an image)` : "Describe a task… (@ to mention files; paste an image)";
+  els.chatInput.placeholder = !ready ? "Load the model to start chatting… (paste an image)" : "Ask Gemma anything… (paste an image)";
   // Run button state is managed by refreshBottomBar (file-type derived); just handle generating lock
   if (generating && els.runBtn) els.runBtn.disabled = true;
   else refreshBottomBar();
@@ -713,10 +842,12 @@ function syncState() {
     const label = capPref === "auto" ? "Auto" : `${(cap/1024).toFixed(0)}K`;
     els.agentContext.textContent = `Files ~${approxTokens.toLocaleString()} tokens · cap ${label} · effective ${(effCapped/1024).toFixed(0)}K${attachments.length?` · ${attachments.length} attached`: ""} · ${undoStack.length?`${undoStack.length} undo`: "no undo"}`;
   }
-  els.stopAgent.hidden = !generating;
-  els.sendAgent.hidden = generating;
-  if (!generating) els.agentInput.disabled = !ready;
-  else els.agentInput.disabled = true;
+  els.stopAgent.hidden = chat || !generating;
+  els.sendAgent.hidden = chat || generating;
+  els.stopChat.hidden = !chat || !generating;
+  els.sendChat.hidden = !chat || generating;
+  els.agentInput.disabled = chat || !ready || generating;
+  els.chatInput.disabled = !chat || !ready || generating;
   updateUndoUI();
 }
 
@@ -725,6 +856,64 @@ function updateUndoUI(){
   els.undoBtn.disabled = undoStack.length === 0 || generating;
   els.undoBtn.title = undoStack.length ? `Undo last change (${undoStack.length} in stack)` : "Nothing to undo";
   els.undoBtn.textContent = undoStack.length ? `↩ Undo (${undoStack.length})` : "↩ Undo";
+}
+
+function handleImagePaste(event) {
+  const items = [...(event.clipboardData?.items || [])];
+  const imageItem = items.find(item => item.kind === "file" && item.type?.startsWith("image/"));
+  const imageFile = imageItem?.getAsFile?.() || [...(event.clipboardData?.files || [])]
+    .find(file => file.type?.startsWith("image/"));
+  if (!imageFile) return;
+  event.preventDefault();
+  stagePendingImage(imageFile);
+}
+
+function stagePendingImage(file) {
+  if (!file?.type?.startsWith("image/")) return;
+  const readId = ++pendingImageRead;
+  const reader = new FileReader();
+  reader.onload = () => {
+    if (readId !== pendingImageRead) return;
+    pendingImage = { url: String(reader.result), name: file.name || "pasted image" };
+    renderPendingImage();
+    syncState();
+    showAppToast("Image attached", "success");
+  };
+  reader.onerror = () => {
+    if (readId === pendingImageRead) showAppToast("Could not read pasted image", "error");
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearPendingImage() {
+  pendingImageRead += 1;
+  pendingImage = null;
+  renderPendingImage();
+  syncState();
+}
+
+function renderPendingImage() {
+  const hosts = [els.agentImageAttachment, els.chatImageAttachment].filter(Boolean);
+  for (const host of hosts) {
+    host.replaceChildren();
+    host.hidden = !pendingImage;
+    if (!pendingImage) continue;
+    const chip = document.createElement("div");
+    chip.className = "ws-image-chip";
+    const img = document.createElement("img");
+    img.src = pendingImage.url;
+    img.alt = "";
+    const name = document.createElement("span");
+    name.textContent = pendingImage.name || "pasted image";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ws-btn ghost tiny";
+    remove.textContent = "×";
+    remove.title = "Remove image";
+    remove.addEventListener("click", clearPendingImage);
+    chip.append(img, name, remove);
+    host.appendChild(chip);
+  }
 }
 
 // ---- Attachments ----
@@ -737,8 +926,7 @@ function addAttachment({path, text}){
   if (attachments.some(a=>a.path===norm)) { showAppToast(`Already attached: ${norm}`, "info"); return; }
   // cap
   if (attachments.length >= 8) { showAppToast("Max 8 attachments — remove one first", "error"); return; }
-  const snippet = content.length>8000 ? content.slice(0,8000) : content;
-  attachments.push({path: norm, text: snippet});
+  attachments.push({path: norm, text: content});
   renderAttachments();
   syncState();
   showAppToast(`Attached ${norm}`, "success");
@@ -870,7 +1058,7 @@ function resolveMentionsInText(text){
       // silently attach (cap 8)
       if(attachments.length<8){
         const content=project.getContent(p) ?? "";
-        if(content) attachments.push({path:p, text: content.slice(0,8000)});
+        if(content) attachments.push({path:p, text: content});
       }
     }
   }
@@ -1308,11 +1496,20 @@ function clearAgentThread() {
   }
   const e = document.createElement("div");
   e.className = "ws-empty";
-  e.innerHTML = `Ask the agent to build, refactor, or fix.<br><br>Tools: <span class="mono">read_file · apply_patch · write_file · search · run</span>. Right-click a file → <b>Explain/Fix/Add</b> or type <span class="mono">@</span>.`;
+  e.innerHTML = `Ask the agent to build, refactor, or fix. Understand that you're working with a small model that has limited world knowledge and reasoning skills.<br><br>Tools: <span class="mono">read_file · apply_patch · write_file · search · run</span>. <br>Right-click a file → <b>Explain/Fix/Add</b> or type <span class="mono">@</span>.`;
   els.agentThread.appendChild(e);
 }
 
-function appendAgent(role, markdown) {
+function appendImageToBubble(bubble, image) {
+  if (!bubble || !image?.url) return;
+  const img = document.createElement("img");
+  img.className = "attached-inline";
+  img.src = image.url;
+  img.alt = "attached image";
+  bubble.appendChild(img);
+}
+
+function appendAgent(role, markdown, image = null) {
   els.agentThread.querySelector(".ws-empty")?.remove();
   const msg = document.createElement("div");
   msg.className = `msg ${role}`;
@@ -1321,7 +1518,12 @@ function appendAgent(role, markdown) {
   label.textContent = role === "user" ? "You" : "Agent";
   const bubble = document.createElement("div");
   bubble.className = `bubble ${role}`;
-  bubble.innerHTML = role === "assistant" ? renderMarkdown(markdown || "") : escapeHtml(markdown || "");
+  appendImageToBubble(bubble, image);
+  if (markdown) {
+    const text = document.createElement("div");
+    text.innerHTML = role === "assistant" ? renderMarkdown(markdown) : escapeHtml(markdown);
+    bubble.appendChild(text);
+  }
   msg.append(label, bubble);
   els.agentThread.appendChild(msg);
   autoScrollAgent(role === "user");
@@ -1348,6 +1550,15 @@ function appendInstructionCard(text, note, step) {
   autoScrollAgent(false);
 }
 
+function appendPromptCard(messages, phase, step) {
+  const promptText = (messages || []).map(message => {
+    const role = String(message?.role || "message").toUpperCase();
+    return `[${role}]\n${String(message?.content || "")}`;
+  }).join("\n\n");
+  const phaseLabel = ({ planning: "Planning", action: "Action", reflection: "Reflection" }[phase]) || phase;
+  appendInstructionCard(promptText, `Prompt sent · ${phaseLabel} · Step ${step}`, step);
+}
+
 function appendToolCard(call, result) {
   const card = document.createElement("div");
   card.className = "ws-tool-card " + (result?.ok ? "ok" : "err");
@@ -1360,23 +1571,33 @@ function appendToolCard(call, result) {
   card.appendChild(head);
 
   // If content or patch exists, show a collapsible preview
-  const payload = call.args?.content ?? call.args?.patch ?? call.args?.code;
+  const payloadTools = new Set(["write_file", "append_file", "apply_patch"]);
+  const payload = payloadTools.has(call.name)
+    ? (call.args?.content ?? call.args?.patch ?? call.args?.code)
+    : null;
   if (payload != null && String(payload).length > 0) {
     const diff = document.createElement("details");
     diff.className = "ws-tool-diff";
     diff.innerHTML = `<summary class="mono">View payload (${String(payload).length} chars)</summary><pre class="mono"><code>${escapeHtml(String(payload))}</code></pre>`;
     card.appendChild(diff);
-  } else if (call.args && Object.keys(call.args).length > 0) {
-    const argsPre = document.createElement("pre");
-    argsPre.className = "ws-tool-args mono";
-    argsPre.textContent = JSON.stringify(call.args, null, 2);
-    card.appendChild(argsPre);
+  } else {
+    const displayArgs = Object.fromEntries(
+      Object.entries(call.args || {}).filter(([key]) => !["path", "filename"].includes(key))
+    );
+    if (Object.keys(displayArgs).length > 0) {
+      const argsPre = document.createElement("pre");
+      argsPre.className = "ws-tool-args mono";
+      argsPre.textContent = JSON.stringify(displayArgs, null, 2);
+      card.appendChild(argsPre);
+    }
   }
 
   if (result) {
-    const out = document.createElement("pre");
+    const output = String(result.output || (result.ok ? "Done" : "Failed"));
+    const out = document.createElement(/```/.test(output) ? "div" : "pre");
     out.className = "ws-tool-out mono";
-    out.textContent = result.output || (result.ok ? "Done" : "Failed");
+    if (out.tagName === "DIV") out.innerHTML = renderMarkdown(output);
+    else out.textContent = output;
     card.appendChild(out);
   }
 
@@ -1397,6 +1618,7 @@ function appendToolCard(call, result) {
 // ---- Permission UI ----
 
 let _permResolver = null;
+let _humanPending = null;
 
 function showPermissionCard(call){
   // compute diff if patch/write
@@ -1435,6 +1657,40 @@ function hidePermissionCard(decision){
   if (_permResolver){ const r=_permResolver; _permResolver=null; r(decision); }
 }
 
+function openHumanResponseCard(question, type = "human_prompt") {
+  cancelHumanResponse();
+  const normalizedQuestion = String(question || "");
+  els.humanTitle.textContent = type === "human_steering" ? "Human steering required" : "Agent needs guidance";
+  els.humanQuestion.textContent = normalizedQuestion || "The agent needs more information.";
+  els.humanInput.value = "";
+  els.humanCard.hidden = false;
+  els.humanCard.scrollIntoView({ block: "nearest" });
+  let resolvePending;
+  const promise = new Promise(resolve => {
+    resolvePending = resolve;
+  });
+  _humanPending = { question: normalizedQuestion, promise, resolve: resolvePending };
+  els.humanInput.focus();
+  return promise;
+}
+
+function resolveHumanResponse(value) {
+  const pending = _humanPending;
+  if (!pending) return;
+  const content = String(value || "").trim();
+  if (!content) return;
+  _humanPending = null;
+  els.humanCard.hidden = true;
+  pending.resolve({ content });
+}
+
+function cancelHumanResponse() {
+  const pending = _humanPending;
+  _humanPending = null;
+  if (els.humanCard) els.humanCard.hidden = true;
+  pending?.resolve(null);
+}
+
 // ---- Undo ----
 
 async function doUndo(){
@@ -1469,37 +1725,119 @@ async function doUndo(){
   } catch(e){ showAppToast("Undo failed: "+String(e), "error"); }
 }
 
-// ---- Send to harness ----
+// ---- Send to agent controller ----
+
+async function sendToChat() {
+  const text = els.chatInput.value.trim();
+  if ((!text && !pendingImage) || !modelService.ready || generating) return;
+
+  els.chatInput.value = "";
+  autoGrowChat();
+  const image = pendingImage;
+  let userContent = text;
+  if (image) {
+    userContent = [
+      { type: "image", url: image.url },
+      { type: "text", text: text || "What is in this image? Describe it in detail." },
+    ];
+    const userMessage = chatThreadView.appendUser("");
+    const userBubble = userMessage.querySelector(".bubble");
+    appendImageToBubble(userBubble, image);
+    if (text) {
+      const textNode = document.createElement("div");
+      textNode.textContent = text;
+      userBubble.appendChild(textNode);
+    }
+    clearPendingImage();
+  } else {
+    chatThreadView.appendUser(text);
+  }
+  chatHistory.push({ role: "user", content: userContent });
+  const assistant = chatThreadView.appendAssistant("");
+  const bubble = assistant.querySelector(".bubble");
+
+  generating = true;
+  abortController = new AbortController();
+  els.chatStatus.textContent = "Gemma thinking…";
+  syncState();
+
+  const unlock = acquireLock("code-chat");
+  if (!unlock) {
+    bubble.textContent = "Another app is generating — try again shortly.";
+    generating = false;
+    abortController = null;
+    syncState();
+    return;
+  }
+
+  let reply = "";
+  let thinkingText = "";
+  let answerText = "";
+  try {
+    const arch = Number(modelService.capabilities?.architecturalMax) || 131072;
+    const contextMax = selectedContextLimit(arch);
+    const result = await streamGeneration({
+      messages: thinkMessages(chatHistory),
+      maxNewTokens: null,
+      contextMax,
+      signal: abortController.signal,
+      onToken: ({ full, thinkingText: nextThinking, answerText: nextAnswer }) => {
+        reply = full;
+        thinkingText = nextThinking;
+        answerText = nextAnswer;
+        chatThreadView.renderAssistant(bubble, { raw: reply, thinkingText, answerText, streaming: true });
+      },
+    });
+    reply = result.reply;
+    thinkingText = result.thinkingText;
+    answerText = result.answerText;
+  } catch (error) {
+    if (!abortController?.signal?.aborted) {
+      reply = `⚠ ${String(error?.message ?? error)}`;
+    }
+  } finally {
+    chatThreadView.renderAssistant(bubble, { raw: reply, thinkingText, answerText });
+    if (reply || answerText) chatHistory.push({ role: "assistant", content: answerText || reply });
+    unlock();
+    generating = false;
+    abortController = null;
+    els.chatStatus.textContent = "";
+    syncState();
+  }
+}
 
 async function sendToAgent() {
   const rawText = els.agentInput.value.trim();
-  if ((!rawText && attachments.length===0) || !modelService.ready || generating) return;
+  if ((!rawText && attachments.length===0 && !pendingImage) || !modelService.ready || generating) return;
   // resolve @ mentions (also pushes attachments)
   resolveMentionsInText(rawText);
   // build task string plus attachments inline if any
   let taskWithAttachments = rawText;
-  // if attachments exist, they will be passed as separate param to harness; but also
+  // if attachments exist, they will be passed as separate param to the controller; but also
   // mention in text for visibility
   const attachNote = attachments.length ? `\n\n[Attached files: ${attachments.map(a=>`@${a.path}`).join(", ")}]` : "";
   if (attachNote) taskWithAttachments = (taskWithAttachments || "(no prompt — use attached context)") + attachNote;
+  const image = pendingImage;
+  if (image) taskWithAttachments = (taskWithAttachments || "(no prompt — inspect the attached image)") + `\n\n[Attached image: ${image.name || "pasted image"}]`;
 
   els.agentInput.value = "";
   hideMentionPop();
   autoGrowAgent();
   syncState();
 
-  const displayText = rawText + (attachments.length? `\n\n> Attached: ${attachments.map(a=>`\`${a.path}\``).join(", ")}` : "");
-  appendAgent("user", displayText || "(attached files)");
+  const displayText = rawText + (attachments.length? `\n\n> Attached: ${attachments.map(a=>`\`${a.path}\``).join(", ")}` : "") + (image ? `\n\n> Attached image: \`${image.name || "pasted image"}\`` : "");
+  appendAgent("user", displayText || "(attached image)", image);
 
   const userMsg = { role: "user", content: taskWithAttachments };
-  harnessMessages.push(userMsg);
-  const thisAttachments = [...attachments];
+  agentHistory.push(userMsg);
+  const thisAttachments = [...attachments, ...(image ? [{ type: "image", url: image.url, name: image.name }] : [])];
   // keep attachments? Per request: attachments should stay until explicitly cleared or sent?
   // We'll clear after send but keep pills until next send? Clear now like pendingSelection old:
   // allow multi-turn with same attachments if user didn't clear? Let's clear for single-turn clarity:
   attachments = [];
   renderAttachments();
-  // keep legacy single selection if exists for harness param
+  clearPendingImage();
+  // Keep the current selection as controller context for this turn.
   const thisSelection = currentSelection;
 
   generating = true;
@@ -1517,7 +1855,7 @@ async function sendToAgent() {
     generating = false; syncState(); abortController = null; return;
   }
 
-  // snapshot project before harness starts (for undo stack entry zero)
+  // Snapshot the project before the controller starts (for undo support).
   const preRunSnap = {};
   for (const [k,v] of project.files) preRunSnap[k]=v.content;
 
@@ -1605,10 +1943,11 @@ async function sendToAgent() {
         .filter(entry => entry.level === "error" || /\[error\]|uncaught\s+\w*error/i.test(entry.text))
         .map(entry => `[${entry.level}] ${entry.text}`);
       const logs = webLogs.map(entry => `[${entry.level}] ${entry.text}`).join("\n").slice(0, 4000) || "(no console output yet)";
+      const probe = previewResult?.probe ?? null;
       if (errorLines.length > 0) {
-        return { ok: false, error: errorLines.join("\n"), log: logs };
+        return { ok: false, error: errorLines.join("\n"), log: logs, probe };
       }
-      return { ok: true, log: logs, probe: previewResult?.probe ?? null };
+      return { ok: true, log: logs, probe };
     },
     installPackage: async (name) => {
       if (!isPyodideLoaded()) await loadPyodideRuntime({ onStatus: s => els.agentStatus.textContent = s });
@@ -1624,19 +1963,25 @@ async function sendToAgent() {
       const decision = await showPermissionCard(call);
       return decision; // allow, allow_always, deny
     },
+    awaitHumanResponse: async (question, metadata) => {
+      if (_humanPending?.question === String(question || "")) return _humanPending.promise;
+      return openHumanResponseCard(question, metadata?.type);
+    },
   };
 
   let streamingThinkingEl = null;
+  const autonomous = els.agenticModeToggle?.checked ?? getAgenticMode();
 
   try {
-    const result = await runHarness({
+    const result = await runAgent({
       project,
       task: taskWithAttachments,
       selection: thisSelection,
       attachments: thisAttachments,
-      history: harnessMessages.slice(0, -1),
+      history: agentHistory.slice(0, -1),
       signal: abortController.signal,
-      maxSteps: 16,
+      maxSteps: 48,
+      autonomous,
       executors,
       onSnapshot: (snap) => {
         // push to undoStack (history stack)
@@ -1647,6 +1992,19 @@ async function sendToAgent() {
       onEvent: (evt) => {
         if (evt.type === "step") {
           els.agentStatus.textContent = `Step ${evt.step}/${evt.of} · cap ${(evt.contextLimit/1024).toFixed(0)}K · ${evt.ctxMeta?.mode || ""} · thinking…`;
+        } else if (evt.type === "prompt") {
+          appendPromptCard(evt.messages, evt.phase, evt.step);
+          const phaseLabel = ({ planning: "Planning", action: "Action", reflection: "Reflection" }[evt.phase]) || evt.phase;
+          els.agentStatus.textContent = `Step ${evt.step} · ${phaseLabel} prompt sent`;
+        } else if (evt.type === "human_prompt" || evt.type === "human_steering") {
+          if (autonomous) {
+            els.agentStatus.textContent = "Agent is deciding on its own…";
+          } else {
+            openHumanResponseCard(evt.question, evt.type);
+            els.agentStatus.textContent = evt.type === "human_steering" ? "Waiting for human steering…" : "Waiting for human guidance…";
+          }
+        } else if (evt.type === "human_response") {
+          appendAgent("user", `Guidance: ${evt.content}`);
         } else if (evt.type === "tasks") {
           renderTaskList(evt.tasks);
         } else if (evt.type === "instruction") {
@@ -1672,7 +2030,9 @@ async function sendToAgent() {
           if (streamingThinkingEl) {
             const thinking = cleanProse(String(evt.thinkingText || ""));
             const rawAnswer = String(evt.answerText || "");
-            const answer = cleanProse(rawAnswer);
+            // Tool protocol markup is rendered separately as a tool card.
+            // Never show its raw payload as a second assistant section while it streams.
+            const answer = /^\s*<tool\b/i.test(rawAnswer) ? "" : cleanProse(rawAnswer);
             let html = "";
             if (thinking) html += `<details class="thinking-block" open><summary>Thinking</summary><div class="thinking-body">${renderMarkdown(thinking)}</div></details>`;
             if (answer) html += renderMarkdown(answer);
@@ -1684,7 +2044,10 @@ async function sendToAgent() {
           if (streamingThinkingEl) {
             const carets = streamingThinkingEl.querySelectorAll(".caret");
             carets.forEach(c => c.remove());
-            if (streamingThinkingEl.textContent.trim().length < 10) {
+            const thinkingBlock = streamingThinkingEl.querySelector(".thinking-block");
+            if (thinkingBlock) {
+              streamingThinkingEl.replaceChildren(thinkingBlock);
+            } else {
               streamingThinkingEl.closest(".msg")?.remove();
             }
           }
@@ -1743,7 +2106,7 @@ async function sendToAgent() {
 
     if (result.ok) {
       els.agentStatus.textContent = "Done.";
-      harnessMessages.push({ role: "assistant", content: result.answer || "(completed)" });
+      agentHistory.push({ role: "assistant", content: result.answer || "(completed)" });
     } else if (result.aborted || abortController?.signal?.aborted) {
       els.agentStatus.textContent = "Stopped.";
       if (streamingThinkingEl) {
@@ -1758,7 +2121,7 @@ async function sendToAgent() {
       els.agentStatus.textContent = result.error ? "Stopped." : "Finished (max steps).";
       if (result.answer) {
         appendAgent("assistant", result.answer);
-        harnessMessages.push({ role: "assistant", content: result.answer });
+        agentHistory.push({ role: "assistant", content: result.answer });
       } else if (!result.error) {
         appendAgent("assistant", "_Reached max steps without final answer. Try a more specific prompt or increase steps._");
       }
@@ -1795,6 +2158,7 @@ async function sendToAgent() {
     generating = false;
     abortController = null;
     hidePermissionCard("deny"); // close if open
+    cancelHumanResponse();
     streamingThinkingEl = null;
     syncState();
   }

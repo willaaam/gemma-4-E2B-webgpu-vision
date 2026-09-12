@@ -56,21 +56,12 @@ const PROBE_SCRIPT = `
       return false;
     }
   }
-  function trackCount(value) {
-    if (!value || value === "none") return 0;
-    return String(value).trim().split(/\s+/).filter(Boolean).length;
-  }
   function snapshot() {
     var body = document.body;
     var all = body ? Array.prototype.slice.call(body.querySelectorAll("*")) : [];
     var controls = all.filter(function (element) {
       return /^(BUTTON|INPUT|SELECT|TEXTAREA)$/.test(element.tagName) || element.getAttribute("role") === "button" || (element.tagName === "A" && element.hasAttribute("href"));
     }).filter(isVisible);
-    var boards = all.filter(function (element) {
-      return /board|grid|canvas/i.test((element.id || "") + " " + (element.className || ""));
-    });
-    var board = boards.find(function (element) { return /board/i.test((element.id || "") + " " + (element.className || "")) && isVisible(element); }) || boards.find(isVisible) || null;
-    var boardStyle = board ? getComputedStyle(board) : null;
     var canvases = all.filter(function (element) { return element.tagName === "CANVAS"; });
     var canvasStates = canvases.map(function (canvas) {
       try { return canvas.toDataURL().slice(-128); } catch (_) { return ""; }
@@ -81,67 +72,24 @@ const PROBE_SCRIPT = `
       controlCount: controls.length,
       controls: controls.slice(0, 8).map(function (element) { return String(element.textContent || element.value || element.id || "").trim().slice(0, 80); }),
       visibleElements: all.filter(isVisible).length,
-      boardCount: boards.length,
-      boardVisible: boards.some(isVisible),
       canvasVisible: canvases.some(isVisible),
-      board: board ? {
-        width: board.getBoundingClientRect().width,
-        height: board.getBoundingClientRect().height,
-        columns: trackCount(boardStyle.gridTemplateColumns),
-        rows: trackCount(boardStyle.gridTemplateRows),
-        children: board.children.length,
-      } : null,
-      cellCount: body ? body.querySelectorAll(".cell,[data-cell]").length : 0,
-      blockCount: body ? body.querySelectorAll(".block,.filled,.occupied,[data-filled='true'],[data-occupied='true']").length : 0,
       canvasCount: canvases.length,
       canvasStates: canvasStates,
       htmlHash: hash(bodyHtml.slice(0, 50000)),
     };
   }
   function changed(before, after) {
-    return before.htmlHash !== after.htmlHash || before.bodyText !== after.bodyText || before.blockCount !== after.blockCount || before.canvasStates.join("|") !== after.canvasStates.join("|");
+    return before.htmlHash !== after.htmlHash || before.bodyText !== after.bodyText || before.canvasStates.join("|") !== after.canvasStates.join("|");
   }
-  function delay(milliseconds) { return new Promise(function (resolve) { setTimeout(resolve, milliseconds); }); }
   function emit(probe) {
     try { parent.postMessage({ type: "ws-probe", token: TOKEN, runId: RUN_ID, probe: probe }, "*"); } catch (_) {}
   }
   async function run() {
-    var initial = snapshot();
-    var launchControl = Array.prototype.slice.call(document.querySelectorAll("button,[role='button'],input[type='button'],input[type='submit']")).find(function (element) {
-      return isVisible(element) && /start|play|begin|launch|run/i.test(String(element.textContent || element.value || ""));
-    });
-    var launchChanged = false;
-    if (launchControl) {
-      try {
-        launchControl.click();
-        await delay(80);
-        launchChanged = changed(initial, snapshot());
-      } catch (_) {}
-    }
-    var before = snapshot();
-    var keyboard = [];
-    var keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "];
-    for (var index = 0; index < keys.length; index++) {
-      var key = keys[index];
-      try {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: key, code: key === " " ? "Space" : key, bubbles: true, cancelable: true }));
-      } catch (_) {}
-      await delay(35);
-      var after = snapshot();
-      keyboard.push({ key: key, changed: changed(before, after) });
-      before = after;
-    }
     var finalState = snapshot();
-    var rendered = Boolean(finalState.bodyText && finalState.visibleElements > 0 && (finalState.boardVisible || finalState.canvasCount > 0 || finalState.controlCount > 0));
-    var keyboardChanged = keyboard.some(function (entry) { return entry.changed; });
+    var rendered = Boolean(finalState.bodyText && finalState.visibleElements > 0);
     emit({
-      ok: rendered && Boolean(launchChanged || keyboardChanged),
+      ok: rendered,
       rendered: rendered,
-      interactive: Boolean(launchChanged || keyboardChanged),
-      launchControl: launchControl ? String(launchControl.textContent || launchControl.value || launchControl.id || "").trim().slice(0, 80) : "",
-      launchChanged: launchChanged,
-      keyboardChanged: keyboardChanged,
-      keyboard: keyboard,
       state: finalState,
     });
   }

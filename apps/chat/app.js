@@ -182,7 +182,7 @@ async function send() {
     const contextMax = selectedContextLimit(arch);
     const res = await streamGeneration({
       messages: promptMessages,
-      maxNewTokens: 4096,
+      maxNewTokens: null,
       contextMax,
       signal: abortController.signal,
       onToken: ({ full, thinkingText: nextThinking, answerText: nextAnswer, startedAt: started, firstTokenAt: first, now, generatedTokens: count }) => {

@@ -205,8 +205,8 @@ export async function runPython(code, options = {}) {
 
   const runCode = String(code ?? "");
 
-  // For automated agent verification with while True or game loops:
-  // wrap execution so it performs syntax checking, import checks, and finite smoke testing
+  // Automated verification for interactive programs uses syntax checking,
+  // import checks, and finite smoke testing.
   if (options.nonInteractive && isLikelyInteractivePython(runCode)) {
     try {
       // 1. Check syntax compilation first
@@ -217,7 +217,7 @@ export async function runPython(code, options = {}) {
       const wrappedVerify = `
 import sys, io
 __ws_old_stdin = sys.stdin
-sys.stdin = io.StringIO("q\\nexit\\n\\n")
+sys.stdin = io.StringIO("\\n")
 try:
     exec(${JSON.stringify(runCode)}, {})
 except SystemExit:
@@ -234,7 +234,7 @@ finally:
       try {
         await pyodide.runPythonAsync(wrappedVerify);
       } catch (runErr) {
-        // If it exited on input or finished, that's completely normal for a game loop
+        // Input exhaustion or normal termination does not indicate a failure.
         const msg = String(runErr?.message || runErr);
         if (!msg.includes("EOFError") && !msg.includes("SystemExit") && !msg.includes("KeyboardInterrupt")) {
           // If there was a genuine NameError / SyntaxError / TypeError, report it
