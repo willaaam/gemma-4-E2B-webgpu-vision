@@ -1,0 +1,853 @@
+{
+  "generatedAt": "2026-09-13T23:24:18.864Z",
+  "python": "3.12",
+  "runtime": "pyodide",
+  "note": "Pure-Python wheels (py3-none-any) vendored for offline install in the Code app.",
+  "packages": [
+    {
+      "name": "arrow",
+      "key": "arrow",
+      "version": "1.4.0",
+      "description": "Human-friendly dates and times for time-series work",
+      "file": "arrow-1.4.0-py3-none-any.whl",
+      "size": 68797,
+      "top": true,
+      "imports": [
+        "arrow"
+      ],
+      "license": "OSI Approved :: Apache Software License",
+      "requires": [
+        "python-dateutil",
+        "tzdata"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "attrs",
+      "key": "attrs",
+      "version": "26.1.0",
+      "description": "Classes without boilerplate — declarative attributes",
+      "file": "attrs-26.1.0-py3-none-any.whl",
+      "size": 67548,
+      "top": true,
+      "imports": [
+        "attr",
+        "attrs"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "beautifulsoup4",
+      "key": "beautifulsoup4",
+      "version": "4.15.0",
+      "description": "Screen-scrape and parse HTML/XML (bs4)",
+      "file": "beautifulsoup4-4.15.0-py3-none-any.whl",
+      "size": 109924,
+      "top": true,
+      "imports": [
+        "bs4"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "soupsieve",
+        "typing-extensions"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "chardet",
+      "key": "chardet",
+      "version": "7.6.0",
+      "description": "Detect character encodings in byte streams",
+      "file": "chardet-7.6.0-py3-none-any.whl",
+      "size": 680279,
+      "top": true,
+      "imports": [
+        "chardet"
+      ],
+      "license": "0BSD",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "Faker",
+      "key": "faker",
+      "version": "40.38.0",
+      "description": "Generate fake datasets — names, addresses, dates, text",
+      "file": "faker-40.38.0-py3-none-any.whl",
+      "size": 2065931,
+      "top": true,
+      "imports": [
+        "faker"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "glom",
+      "key": "glom",
+      "version": "25.12.0",
+      "description": "Declarative access and transformation of nested data",
+      "file": "glom-25.12.0-py3-none-any.whl",
+      "size": 103295,
+      "top": true,
+      "imports": [
+        "glom"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [
+        "boltons",
+        "attrs",
+        "face"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "humanize",
+      "key": "humanize",
+      "version": "4.16.0",
+      "description": "Human-readable dates, file sizes and numbers",
+      "file": "humanize-4.16.0-py3-none-any.whl",
+      "size": 137209,
+      "top": true,
+      "imports": [
+        "humanize"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "imbalanced-learn",
+      "key": "imbalanced-learn",
+      "version": "0.14.2",
+      "description": "Resampling for imbalanced classification datasets",
+      "file": "imbalanced_learn-0.14.2-py3-none-any.whl",
+      "size": 236073,
+      "top": true,
+      "imports": [
+        "imblearn"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "numpy",
+        "scipy",
+        "scikit-learn",
+        "sklearn-compat",
+        "joblib",
+        "threadpoolctl"
+      ],
+      "externalRequires": [
+        "numpy",
+        "scipy",
+        "scikit-learn"
+      ]
+    },
+    {
+      "name": "Markdown",
+      "key": "markdown",
+      "version": "3.10.3",
+      "description": "Convert Markdown to HTML",
+      "file": "markdown-3.10.3-py3-none-any.whl",
+      "size": 110757,
+      "top": true,
+      "imports": [
+        "markdown"
+      ],
+      "license": "BSD-3-Clause",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "mlxtend",
+      "key": "mlxtend",
+      "version": "0.25.0",
+      "description": "ML extensions: frequent patterns, association rules, stacking",
+      "file": "mlxtend-0.25.0-py3-none-any.whl",
+      "size": 1355323,
+      "top": true,
+      "imports": [
+        "mlxtend"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [
+        "scipy",
+        "numpy",
+        "pandas",
+        "scikit-learn",
+        "matplotlib",
+        "joblib"
+      ],
+      "externalRequires": [
+        "scipy",
+        "numpy",
+        "pandas",
+        "scikit-learn",
+        "matplotlib"
+      ]
+    },
+    {
+      "name": "more-itertools",
+      "key": "more-itertools",
+      "version": "11.1.0",
+      "description": "Extra building blocks for iterators",
+      "file": "more_itertools-11.1.0-py3-none-any.whl",
+      "size": 72226,
+      "top": true,
+      "imports": [
+        "more_itertools"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "natsort",
+      "key": "natsort",
+      "version": "8.4.0",
+      "description": "Natural sort order for version/label strings",
+      "file": "natsort-8.4.0-py3-none-any.whl",
+      "size": 38268,
+      "top": true,
+      "imports": [
+        "natsort"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "networkx",
+      "key": "networkx",
+      "version": "3.6.1",
+      "description": "Create, manipulate and study graphs and networks",
+      "file": "networkx-3.6.1-py3-none-any.whl",
+      "size": 2068504,
+      "top": true,
+      "imports": [
+        "networkx"
+      ],
+      "license": "BSD-3-Clause",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "numpy-financial",
+      "key": "numpy-financial",
+      "version": "1.0.0",
+      "description": "Financial maths: NPV, IRR, PMT and amortization",
+      "file": "numpy_financial-1.0.0-py3-none-any.whl",
+      "size": 14025,
+      "top": true,
+      "imports": [
+        "numpy_financial"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [
+        "numpy"
+      ],
+      "externalRequires": [
+        "numpy"
+      ]
+    },
+    {
+      "name": "openpyxl",
+      "key": "openpyxl",
+      "version": "3.1.5",
+      "description": "Read and write Excel 2010+ .xlsx files",
+      "file": "openpyxl-3.1.5-py2.py3-none-any.whl",
+      "size": 250910,
+      "top": true,
+      "imports": [
+        "openpyxl"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "et-xmlfile"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "packaging",
+      "key": "packaging",
+      "version": "26.3",
+      "description": "Version parsing, specifiers and dependency utilities",
+      "file": "packaging-26.3-py3-none-any.whl",
+      "size": 129956,
+      "top": true,
+      "imports": [
+        "packaging"
+      ],
+      "license": "Apache-2.0 OR BSD-2-Clause",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "petl",
+      "key": "petl",
+      "version": "1.7.25",
+      "description": "Lightweight ETL over tabular data",
+      "file": "petl-1.7.25-py3-none-any.whl",
+      "size": 244635,
+      "top": true,
+      "imports": [
+        "petl"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "pingouin",
+      "key": "pingouin",
+      "version": "0.6.1",
+      "description": "Statistical tests with effect sizes and power (t-test, ANOVA, …)",
+      "file": "pingouin-0.6.1-py3-none-any.whl",
+      "size": 203990,
+      "top": true,
+      "imports": [
+        "pingouin"
+      ],
+      "license": "GPL-3.0",
+      "requires": [
+        "matplotlib",
+        "numpy",
+        "pandas",
+        "pandas-flavor",
+        "scikit-learn",
+        "scipy",
+        "seaborn",
+        "statsmodels",
+        "tabulate"
+      ],
+      "externalRequires": [
+        "matplotlib",
+        "numpy",
+        "pandas",
+        "scikit-learn",
+        "scipy",
+        "statsmodels"
+      ]
+    },
+    {
+      "name": "prettytable",
+      "key": "prettytable",
+      "version": "3.18.0",
+      "description": "Print attractive ASCII tables for reports",
+      "file": "prettytable-3.18.0-py3-none-any.whl",
+      "size": 37357,
+      "top": true,
+      "imports": [
+        "prettytable"
+      ],
+      "license": "BSD-3-Clause",
+      "requires": [
+        "wcwidth"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "Pygments",
+      "key": "pygments",
+      "version": "2.21.0",
+      "description": "Syntax highlighting for 500+ languages",
+      "file": "pygments-2.21.0-py3-none-any.whl",
+      "size": 1250147,
+      "top": true,
+      "imports": [
+        "pygments"
+      ],
+      "license": "BSD-2-Clause",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "pyparsing",
+      "key": "pyparsing",
+      "version": "3.3.2",
+      "description": "Recursive-descent parsing made readable",
+      "file": "pyparsing-3.3.2-py3-none-any.whl",
+      "size": 122781,
+      "top": true,
+      "imports": [
+        "pyparsing"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "python-dateutil",
+      "key": "python-dateutil",
+      "version": "2.9.0.post0",
+      "description": "Powerful date parsing, arithmetic and recurrence rules",
+      "file": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "size": 229892,
+      "top": true,
+      "imports": [
+        "dateutil"
+      ],
+      "license": "OSI Approved :: BSD License, OSI Approved :: Apache Software License",
+      "requires": [
+        "six"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "pytz",
+      "key": "pytz",
+      "version": "2026.3.post1",
+      "description": "World timezone definitions (IANA database)",
+      "file": "pytz-2026.3.post1-py2.py3-none-any.whl",
+      "size": 508283,
+      "top": true,
+      "imports": [
+        "pytz"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "rich",
+      "key": "rich",
+      "version": "15.0.0",
+      "description": "Beautiful terminal text, tables, progress and syntax highlighting",
+      "file": "rich-15.0.0-py3-none-any.whl",
+      "size": 310654,
+      "top": true,
+      "imports": [
+        "rich"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "markdown-it-py",
+        "pygments"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "seaborn",
+      "key": "seaborn",
+      "version": "0.13.2",
+      "description": "Statistical data visualization built on matplotlib",
+      "file": "seaborn-0.13.2-py3-none-any.whl",
+      "size": 294914,
+      "top": true,
+      "imports": [
+        "seaborn"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [
+        "numpy",
+        "pandas",
+        "matplotlib"
+      ],
+      "externalRequires": [
+        "numpy",
+        "pandas",
+        "matplotlib"
+      ]
+    },
+    {
+      "name": "six",
+      "key": "six",
+      "version": "1.17.0",
+      "description": "Python 2/3 compatibility helpers (still a common dependency)",
+      "file": "six-1.17.0-py2.py3-none-any.whl",
+      "size": 11050,
+      "top": true,
+      "imports": [
+        "six"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "tabulate",
+      "key": "tabulate",
+      "version": "0.10.0",
+      "description": "Pretty-print tabular data as plain-text tables",
+      "file": "tabulate-0.10.0-py3-none-any.whl",
+      "size": 39814,
+      "top": true,
+      "imports": [
+        "tabulate"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "texttable",
+      "key": "texttable",
+      "version": "1.7.0",
+      "description": "Simple ASCII tables for terminals",
+      "file": "texttable-1.7.0-py2.py3-none-any.whl",
+      "size": 10768,
+      "top": true,
+      "imports": [
+        "texttable"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "toolz",
+      "key": "toolz",
+      "version": "1.1.0",
+      "description": "Functional utilities for iterators, functions and dicts",
+      "file": "toolz-1.1.0-py3-none-any.whl",
+      "size": 58093,
+      "top": true,
+      "imports": [
+        "tlz",
+        "toolz"
+      ],
+      "license": "BSD-3-Clause",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "tqdm",
+      "key": "tqdm",
+      "version": "4.70.1",
+      "description": "Fast, extensible progress bars",
+      "file": "tqdm-4.70.1-py3-none-any.whl",
+      "size": 80199,
+      "top": true,
+      "imports": [
+        "tqdm"
+      ],
+      "license": "MPL-2.0 AND MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "tzdata",
+      "key": "tzdata",
+      "version": "2026.4",
+      "description": "IANA timezone database for offline timezone handling",
+      "file": "tzdata-2026.4-py2.py3-none-any.whl",
+      "size": 347494,
+      "top": true,
+      "imports": [
+        "tzdata"
+      ],
+      "license": "Apache-2.0",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "xlsxwriter",
+      "key": "xlsxwriter",
+      "version": "3.2.9",
+      "description": "Write formatted .xlsx spreadsheets and charts",
+      "file": "xlsxwriter-3.2.9-py3-none-any.whl",
+      "size": 175315,
+      "top": true,
+      "imports": [
+        "xlsxwriter"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "xmltodict",
+      "key": "xmltodict",
+      "version": "1.0.4",
+      "description": "Work with XML as if it were JSON",
+      "file": "xmltodict-1.0.4-py3-none-any.whl",
+      "size": 13580,
+      "top": true,
+      "imports": [
+        "xmltodict"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "yellowbrick",
+      "key": "yellowbrick",
+      "version": "1.5",
+      "description": "Visual diagnostics for machine-learning models",
+      "file": "yellowbrick-1.5-py3-none-any.whl",
+      "size": 282603,
+      "top": true,
+      "imports": [
+        "yellowbrick"
+      ],
+      "license": "OSI Approved :: Apache Software License",
+      "requires": [
+        "matplotlib",
+        "scipy",
+        "scikit-learn",
+        "numpy",
+        "cycler"
+      ],
+      "externalRequires": [
+        "matplotlib",
+        "scipy",
+        "scikit-learn",
+        "numpy"
+      ]
+    },
+    {
+      "name": "boltons",
+      "key": "boltons",
+      "version": "26.2.0",
+      "description": "Dependency of glom",
+      "file": "boltons-26.2.0-py3-none-any.whl",
+      "size": 199536,
+      "top": false,
+      "imports": [
+        "boltons"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "cloudpickle",
+      "key": "cloudpickle",
+      "version": "3.1.2",
+      "description": "Dependency of joblib",
+      "file": "cloudpickle-3.1.2-py3-none-any.whl",
+      "size": 22228,
+      "top": false,
+      "imports": [
+        "cloudpickle"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "cycler",
+      "key": "cycler",
+      "version": "0.12.1",
+      "description": "Dependency of yellowbrick",
+      "file": "cycler-0.12.1-py3-none-any.whl",
+      "size": 8321,
+      "top": false,
+      "imports": [
+        "cycler"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "et-xmlfile",
+      "key": "et-xmlfile",
+      "version": "2.0.0",
+      "description": "Dependency of openpyxl",
+      "file": "et_xmlfile-2.0.0-py3-none-any.whl",
+      "size": 18059,
+      "top": false,
+      "imports": [
+        "et_xmlfile"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "face",
+      "key": "face",
+      "version": "26.0.1",
+      "description": "Dependency of glom",
+      "file": "face-26.0.1-py3-none-any.whl",
+      "size": 57572,
+      "top": false,
+      "imports": [
+        "face"
+      ],
+      "license": "BSD-2-Clause",
+      "requires": [
+        "boltons"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "joblib",
+      "key": "joblib",
+      "version": "1.6.0",
+      "description": "Dependency of mlxtend",
+      "file": "joblib-1.6.0-py3-none-any.whl",
+      "size": 306115,
+      "top": false,
+      "imports": [
+        "joblib"
+      ],
+      "license": "BSD-3-Clause",
+      "requires": [
+        "cloudpickle"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "markdown-it-py",
+      "key": "markdown-it-py",
+      "version": "4.2.0",
+      "description": "Dependency of rich",
+      "file": "markdown_it_py-4.2.0-py3-none-any.whl",
+      "size": 91687,
+      "top": false,
+      "imports": [
+        "markdown_it"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "mdurl"
+      ],
+      "externalRequires": []
+    },
+    {
+      "name": "mdurl",
+      "key": "mdurl",
+      "version": "0.1.2",
+      "description": "Dependency of markdown-it-py",
+      "file": "mdurl-0.1.2-py3-none-any.whl",
+      "size": 9979,
+      "top": false,
+      "imports": [
+        "mdurl"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "pandas-flavor",
+      "key": "pandas-flavor",
+      "version": "0.8.1",
+      "description": "Dependency of pingouin",
+      "file": "pandas_flavor-0.8.1-py3-none-any.whl",
+      "size": 8528,
+      "top": false,
+      "imports": [
+        "pandas_flavor"
+      ],
+      "license": "OSI Approved :: MIT License",
+      "requires": [
+        "pandas",
+        "xarray"
+      ],
+      "externalRequires": [
+        "pandas"
+      ]
+    },
+    {
+      "name": "sklearn-compat",
+      "key": "sklearn-compat",
+      "version": "0.1.6",
+      "description": "Dependency of imbalanced-learn",
+      "file": "sklearn_compat-0.1.6-py3-none-any.whl",
+      "size": 22868,
+      "top": false,
+      "imports": [
+        "sklearn_compat"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [
+        "scikit-learn"
+      ],
+      "externalRequires": [
+        "scikit-learn"
+      ]
+    },
+    {
+      "name": "soupsieve",
+      "key": "soupsieve",
+      "version": "2.9.2",
+      "description": "Dependency of beautifulsoup4",
+      "file": "soupsieve-2.9.2-py3-none-any.whl",
+      "size": 37370,
+      "top": false,
+      "imports": [
+        "soupsieve"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "threadpoolctl",
+      "key": "threadpoolctl",
+      "version": "3.6.0",
+      "description": "Dependency of imbalanced-learn",
+      "file": "threadpoolctl-3.6.0-py3-none-any.whl",
+      "size": 18638,
+      "top": false,
+      "imports": [
+        "threadpoolctl"
+      ],
+      "license": "OSI Approved :: BSD License",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "typing-extensions",
+      "key": "typing-extensions",
+      "version": "4.16.0",
+      "description": "Dependency of beautifulsoup4",
+      "file": "typing_extensions-4.16.0-py3-none-any.whl",
+      "size": 45571,
+      "top": false,
+      "imports": [
+        "typing_extensions"
+      ],
+      "license": "PSF-2.0",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "wcwidth",
+      "key": "wcwidth",
+      "version": "0.8.3",
+      "description": "Dependency of prettytable",
+      "file": "wcwidth-0.8.3-py3-none-any.whl",
+      "size": 331669,
+      "top": false,
+      "imports": [
+        "wcwidth"
+      ],
+      "license": "MIT",
+      "requires": [],
+      "externalRequires": []
+    },
+    {
+      "name": "xarray",
+      "key": "xarray",
+      "version": "2026.7.0",
+      "description": "Dependency of pandas-flavor",
+      "file": "xarray-2026.7.0-py3-none-any.whl",
+      "size": 1426778,
+      "top": false,
+      "imports": [
+        "xarray"
+      ],
+      "license": "Apache-2.0",
+      "requires": [
+        "numpy",
+        "packaging",
+        "pandas"
+      ],
+      "externalRequires": [
+        "numpy",
+        "pandas"
+      ]
+    }
+  ],
+  "unavailable": {
+    "pyyaml": "YAML parser and emitter (pure-Python build)"
+  }
+}

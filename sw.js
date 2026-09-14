@@ -10,9 +10,10 @@
 //   • cross-origin hosts other than the pinned CDNs.
 // Interfering with those would break weight streaming and resumable downloads.
 
-const VERSION = "ws-v1";
+const VERSION = "ws-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const LIB_CACHE = `${VERSION}-libs`;
+const PYPI_CACHE = `${VERSION}-pypi`;
 
 const SHELL_ASSETS = [
   "./",
@@ -28,14 +29,24 @@ const CDN_ORIGINS = [
   "https://cdnjs.cloudflare.com:",
   "https://fonts.googleapis.com:",
   "https://fonts.gstatic.com:",
+  // PyPI wheels fetched by micropip. Wheel URLs are immutable and versioned, so
+  // caching them keeps installed Python packages usable offline afterwards.
+  "https://files.pythonhosted.org:",
+  "https://pypi.org:",
 ];
 
+// Vendored pure-Python wheels shipped with the app (see tools/vendor-python-packages.mjs).
+const VENDOR_PREFIX = "/vendor/python-packages/";
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(SHELL_CACHE)
-      .then((c) => c.addAll(SHELL_ASSETS))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(SHELL_CACHE);
+    await cache.addAll(SHELL_ASSETS);
+    // Offline Python bundle manifest — optional, so failure must not break install.
+    try {
+      await cache.add(new Request("./vendor/python-packages/manifest.json", { cache: "no-cache" }));
+    } catch { /* bundle not vendored — packages fall back to PyPI */ }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {
@@ -54,6 +65,13 @@ function isWeights(url) {
   return url.includes("safetensors") || url.includes("huggingface.co") || url.includes("hf.co");
 }
 
+// A wheel that is safe to cache indefinitely: either vendored with the app or
+// downloaded from PyPI by micropip (wheel files are immutable and versioned).
+function isCacheableWheel(url) {
+  if (!/\.whl(\?|#|$)/i.test(url)) return false;
+  return url.includes(VENDOR_PREFIX) || url.includes("pythonhosted.org") || url.includes("pypi.org");
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -62,6 +80,27 @@ self.addEventListener("fetch", (event) => {
   if (req.headers.has("range")) return;
   const url = req.url;
   if (isWeights(url)) return;
+
+  // Wheels are immutable and are the whole point of the offline bundle, so serve
+  // them cache-first. (manifest.json deliberately does NOT belong here — it is a
+  // mutable index and must be re-fetched, or a re-vendor would never show up.)
+  if (isCacheableWheel(url)) {
+    event.respondWith((async () => {
+      const cached = await caches.match(req);
+      if (cached) return cached;
+      try {
+        const res = await fetch(req);
+        if (res.ok) {
+          const c = await caches.open(PYPI_CACHE);
+          c.put(req, res.clone());
+        }
+        return res;
+      } catch {
+        return new Response("", { status: 504 });
+      }
+    })());
+    return;
+  }
 
   // CDN libraries: cache-first (immutable in practice, versioned URLs).
   if (isCdn(url)) {

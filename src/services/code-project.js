@@ -1,4 +1,4 @@
-// Virtual file-system for the agentic code workstation.
+// Virtual file-system for the code workstation.
 // Stores a flat map path → { content, mtime } and derives directory tree on demand.
 // Path semantics: POSIX, no leading slash, `a/b/c.py`. Folders are implicit via prefixes.
 // Persists to IndexedDB settings key `code-project-v3` (replaces code-buffers-v2).
@@ -53,13 +53,13 @@ document.getElementById("go").addEventListener("click", () => {
 const DEFAULT_FILES = {
   "README.md": `# Project
 
-Welcome to the agentic code workspace.
+Welcome to the code workspace.
 
 * Create files & folders in the explorer on the left
 * Open files to edit with syntax highlighting
-* Ask the agent on the right to build, refactor, or fix code
+* Ask Chat on the right about your files — attach files with @ or selections
 * Run Python files via Pyodide or preview Web files in the sandbox
-* Select code in the editor → “Add selection” to give the agent extra context
+* Select code in the editor → “Add selection” to give Chat extra context
 * Upload a .zip to import a codebase, Download .zip to export
 * Reset Project clears everything back to this template
 

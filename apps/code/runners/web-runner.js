@@ -1,8 +1,9 @@
 // Web runtime for the code environment.
-// Composes three virtual files (index.html / style.css / script.js) into a
-// sandboxed iframe via srcdoc. The iframe gets `allow-scripts` but NOT
-// `allow-same-origin`, so it cannot touch the parent DOM, cookies or storage.
-// A console bridge forwards console.* and errors to the app over postMessage.
+// Renders any HTML file from the project into a sandboxed iframe via srcdoc,
+// inlining the CSS/JS it references (resolved generically from the file map).
+// The iframe gets `allow-scripts` but NOT `allow-same-origin`, so it cannot
+// touch the parent DOM, cookies or storage. A console bridge forwards
+// console.* and errors to the app over postMessage.
 
 const BRIDGE_TOKEN = `ws-bridge-${Math.random().toString(36).slice(2)}`;
 const BRIDGE_RUN_ID_PLACEHOLDER = "__ws_run_id__";
@@ -132,8 +133,12 @@ document.getElementById("go").addEventListener("click", () => {
 
 /**
  * Compose virtual files into a full HTML document string.
- * Supports both legacy {html,css,js} shape and new flat project map.
- * Relative references to style.css / script.js are inlined when those exist.
+ *
+ * Generic by design: the entry is any .html file in the project, and every
+ * relative `<link href>` / `<script src>` reference is resolved against the
+ * project file map and inlined. Resolution tries the exact path, the path
+ * relative to the entry's own folder (so nested entry points work), then a
+ * unique basename match. No file names are hardcoded.
  */
 function contentOf(value) {
   return typeof value === "string" ? value : value?.content ?? value ?? "";
@@ -143,59 +148,113 @@ function normalizeEntry(entry) {
   return String(entry || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
-export function composeWebDoc(files, entry = null, runId = null) {
-  // Normalize input: flat map, CodeProject, or legacy trio
-  const requestedEntry = normalizeEntry(entry);
-  let html = "", css = "", js = "";
-  if (files && typeof files === "object") {
-    if (files.html !== undefined || files.css !== undefined || files.js !== undefined) {
-      html = files.html ?? "";
-      css = files.css ?? "";
-      js = files.js ?? "";
-    } else if (files instanceof Map) {
-      for (const [k, v] of files) {
-        const c = contentOf(v);
-        if (requestedEntry && k === requestedEntry && /\.html?$/i.test(k)) html = c;
-        else if (!requestedEntry && (k === "index.html" || k.endsWith("/index.html"))) html = c;
-      }
-      if (!html && requestedEntry) {
-        for (const [k, v] of files) {
-          if (/\.html?$/i.test(k)) { html = contentOf(v); break; }
-        }
-      }
-      // collect possible css/js
-      const get = (p) => {
-        const v = files.get(p);
-        return contentOf(v);
-      };
-      css = get("style.css") ?? "";
-      js = get("script.js") ?? "";
-      if (!html) {
-        // fallback: pick any .html
-        for (const [k, v] of files) if (/\.html?$/i.test(k)) { html = contentOf(v); break; }
-      }
-    } else if (files.files instanceof Map) {
-      // CodeProject
-      return composeWebDoc(files.files, entry, runId);
-    } else {
-      // plain {path:content}
-      if (requestedEntry && files[requestedEntry] != null) html = contentOf(files[requestedEntry]);
-      else if (files["index.html"] != null) html = contentOf(files["index.html"]);
-      else {
-        for (const [k, v] of Object.entries(files)) if (/\.html?$/i.test(k)) { html = contentOf(v); break; }
-      }
-      css = contentOf(files["style.css"]);
-      js = contentOf(files["script.js"]);
-      // also handle case where files is {files:{...}} from project
-      if (!html && files.files) return composeWebDoc(files.files, entry, runId);
-    }
-  }
-  if (!html) html = `<!doctype html><html><head><meta charset="utf-8"></head><body><p>No index.html found.</p></body></html>`;
+function isExternalRef(ref) {
+  return /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(ref) || /^[a-z][a-z0-9+.-]*:/i.test(ref);
+}
 
-  // inline <link rel="stylesheet" href="style.css">
-  html = html.replace(/<link[^>]*href=["']style\.css["'][^>]*>/gi, () => `<style>\n${css ?? ""}\n</style>`);
-  // inline <script src="script.js"></script> (keep script tags out of the bridge's way)
-  html = html.replace(/<script[^>]*src=["']script\.js["'][^>]*>\s*<\/script>/gi, () => `<script>\n${js ?? ""}\n<\/script>`);
+function isHtmlPath(p) {
+  return /\.html?$/i.test(String(p || ""));
+}
+
+function dirOf(p) {
+  const i = String(p || "").lastIndexOf("/");
+  return i === -1 ? "" : String(p).slice(0, i);
+}
+
+// Collapse "." and ".." segments out of a POSIX-ish path.
+function collapse(p) {
+  const out = [];
+  for (const part of String(p || "").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return out.join("/");
+}
+
+/** Normalize any supported project shape (Map, CodeProject, flat map, legacy trio) to Map<path, content>. */
+export function toFileMap(files) {
+  const map = new Map();
+  if (!files || typeof files !== "object") return map;
+  if (files instanceof Map) {
+    for (const [k, v] of files) map.set(normalizeEntry(k), contentOf(v));
+    return map;
+  }
+  if (files.files instanceof Map) return toFileMap(files.files);
+  if (files.html !== undefined || files.css !== undefined || files.js !== undefined) {
+    map.set("index.html", contentOf(files.html));
+    map.set("style.css", contentOf(files.css));
+    map.set("script.js", contentOf(files.js));
+    return map;
+  }
+  for (const [k, v] of Object.entries(files)) {
+    if (k === "files") continue;
+    map.set(normalizeEntry(k), contentOf(v));
+  }
+  return map;
+}
+
+/** Resolve one relative href/src reference to a project path, or null when it is external/missing.
+ *  Ambiguous basenames are left alone rather than silently picking the wrong file. */
+export function resolveWebRef(ref, entryPath, map) {
+  let raw = String(ref || "").trim();
+  if (!raw || isExternalRef(raw) || raw.startsWith("data:")) return null;
+  raw = raw.split(/[?#]/)[0].replace(/^\.\//, "");
+  if (!raw) return null;
+  const candidates = [];
+  if (raw.startsWith("/")) {
+    candidates.push(collapse(raw));
+  } else {
+    const base = dirOf(entryPath);
+    if (base) candidates.push(collapse(`${base}/${raw}`));
+    candidates.push(collapse(raw));
+  }
+  for (const c of candidates) if (c && map.has(c)) return c;
+  const base = collapse(raw).split("/").pop();
+  if (base) {
+    const matches = [...map.keys()].filter((k) => k.split("/").pop() === base);
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
+}
+
+// Inline every resolvable stylesheet / script reference from the project.
+function inlineProjectAssets(html, entryPath, map) {
+  let out = String(html);
+  out = out.replace(/<link\b[^>]*>/gi, (tag) => {
+    if (!/\brel\s*=\s*["']?[^"'>]*stylesheet/i.test(tag)) return tag;
+    const m = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag);
+    const resolved = m ? resolveWebRef(m[1], entryPath, map) : null;
+    if (!resolved) return tag;
+    return `<style data-ws-src="${resolved}">\n${map.get(resolved) ?? ""}\n</style>`;
+  });
+  out = out.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (tag, attrs) => {
+    const m = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(attrs);
+    if (!m) return tag;
+    const resolved = resolveWebRef(m[1], entryPath, map);
+    if (!resolved) return tag;
+    return `<script data-ws-src="${resolved}">\n${map.get(resolved) ?? ""}\n</script>`;
+  });
+  return out;
+}
+
+/** Which HTML file a run would render: the explicit entry when valid, else the first HTML file. */
+export function pickWebEntry(files, entry = null) {
+  const map = toFileMap(files);
+  const requested = normalizeEntry(entry);
+  if (requested && map.has(requested) && isHtmlPath(requested)) return requested;
+  return [...map.keys()].find(isHtmlPath) ?? null;
+}
+
+export function composeWebDoc(files, entry = null, runId = null) {
+  const map = toFileMap(files);
+  const entryPath = pickWebEntry(map, entry);
+  let html = entryPath ? map.get(entryPath) : "";
+  if (!html) {
+    html = `<!doctype html><html><head><meta charset="utf-8"></head><body><p>No HTML file found in this project.</p></body></html>`;
+  } else {
+    html = inlineProjectAssets(html, entryPath, map);
+  }
   // inject the console bridge right after <head> (or at the top)
   const bridgeScript = BRIDGE_SCRIPT.replace(JSON.stringify(BRIDGE_RUN_ID_PLACEHOLDER), JSON.stringify(String(runId || "")));
   if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => `${m}\n${bridgeScript}`);
@@ -209,7 +268,6 @@ export function composeWebDoc(files, entry = null, runId = null) {
 // Helper to compose from a CodeProject file map with multiple html entries
 export function composeWebDocFromProject(project, entry = null, runId = null) {
   if (!project) return composeWebDoc({});
-  // project is CodeProject instance
   const map = project.files;
   return composeWebDoc(map, entry, runId);
 }
@@ -242,10 +300,8 @@ export class WebRunner {
     this.clearConsole();
     const runId = `run-${++this._runSequence}`;
     this._activeRunId = runId;
-    // Accept CodeProject, Map, plain object, or legacy trio
-    const srcdoc = files && typeof files.files === "object" && files.files instanceof Map
-      ? composeWebDoc(files.files, entry, runId)
-      : composeWebDoc(files, entry, runId);
+    // Accepts CodeProject, Map, plain object, or legacy trio (see toFileMap).
+    const srcdoc = composeWebDoc(files, entry, runId);
     const probe = new Promise((resolve) => {
       const timer = setTimeout(() => {
         this._probeWaiters.delete(runId);

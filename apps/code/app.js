@@ -1,26 +1,26 @@
-// Agentic coding workstation — Explorer + CodeMirror + task-list controller.
-// The controller owns planning and execution; this module owns the Code UI.
-// Explorer right-click → Explain/Fix/Add; @-mentions autocomplete; Auto-approve toggle; undo stack.
+// Code workstation — Explorer + CodeMirror + file-aware chat.
+// Chat is read-only Q&A over project files: @-mentions, attachments,
+// editor selections and explorer quick actions feed file context into the
+// prompt. Suggested code is copied manually via per-snippet Copy buttons.
+// Explorer right-click → Explain/Review/Add; @-mentions autocomplete.
 
 import { modelService } from "../../src/services/model-service.js";
 import { acquireLock, streamGeneration } from "../../src/services/generation.js";
-import { renderMarkdown, escapeHtml } from "../../src/lib/markdown.js";
 import { createChatThread } from "../../src/lib/chat-thread.js";
 import { loadProject, saveProject, resetProject, normalizePathExport, dirname, basename } from "../../src/services/code-project.js";
 import { createEditor } from "./components/editor-cm.js";
 import { createExplorer } from "./components/explorer.js";
-import { runAgent } from "../../src/agent/controller.js";
-import { getAutoApprove, setAutoApprove, onAutoApproveChange } from "../../src/harness/permissions.js";
-import { computeDiffPreview } from "../../src/harness/diff.js";
 import {
-  loadPyodideRuntime, runPython, installPackage, isPyodideLoaded,
-  syncFilesToPyFS, stopPython, queueStdin, clearStdin, installedPackages
+  loadPyodideRuntime, runPython, isPyodideLoaded,
+  syncFilesToPyFS, stopPython, queueStdin, installedPackages
 } from "./runners/pyodide-runner.js";
+import {
+  bundledPackages, installBundledPackage, installPackagePreferred, ensureBundledImports,
+  prepareOfflineStack
+} from "./runners/python-packages.js";
 import { WebRunner } from "./runners/web-runner.js";
-import { chunkText, BM25Index } from "../../src/services/context.js";
 import { getContextLimitPreference, setContextLimitPreference, selectedContextLimit, onContextLimitChange } from "../../src/services/context-preference.js";
 import { getThinking, setThinking, thinkMessages } from "../../src/services/settings.js";
-import { cleanForDisplay as cleanProse } from "../../src/agent/protocol.js";
 
 
 let els = {};
@@ -29,49 +29,36 @@ let explorer = null;
 let editorCtrl = null;
 let activePath = null;
 let openTabs = [];
-// Attachments: array of {path,text} from selections, @-mentions, file Add-to-Agent
+// Attachments: array of {path,text} from selections, @-mentions, file Add-to-Chat
 let attachments = [];
 let pendingImage = null;
 let pendingImageRead = 0;
 let currentSelection = null; // live selection {text,path,from,to}
-let agentHistory = [];
 let generating = false;
 let abortController = null;
 let unsubModel = null;
 let unsubContext = null;
 let runner = null;
 let saveDebounce = 0;
-let threadView = null;
-let pythonLogs = [];
-let webLogs = [];
+// Single console buffer shared by the Python runtime and the web preview.
+// Entries are {level, text, source} — source is "python" | "web".
+let consoleLogs = [];
 let outCollapsed = false;
 let editorSetting = false;
-let undoStack = []; // [{before, after, at, call}] history stack per mutation
 let mentionState = null; // {query, start, end}
 let chatHistory = [];
 let chatThreadView = null;
-let rightPaneMode = "agent";
+// HTML file currently rendered in the preview pane (null until first run).
+let previewEntry = null;
 const OUT_HEIGHT_KEY = "ws-code-out-height";
 const OUT_COLLAPSED_KEY = "ws-code-out-collapsed";
-const AGENTIC_MODE_KEY = "ws-agentic-mode";
-const RIGHT_PANE_MODE_KEY = "ws-code-right-pane-mode";
+// Set while a Python run is in flight. If it is still present on the next load,
+// the previous run never returned — i.e. it froze the tab and had to be killed.
+const RUN_PENDING_KEY = "ws-code-run-pending";
 const CODE_MIN_CONTEXT_TOKENS = 32_768;
-
-function getAgenticMode() {
-  try { return localStorage.getItem(AGENTIC_MODE_KEY) !== "0"; } catch { return true; }
-}
-
-function setAgenticMode(value) {
-  try { localStorage.setItem(AGENTIC_MODE_KEY, value ? "1" : "0"); } catch {}
-}
-
-function getRightPaneMode() {
-  try { return localStorage.getItem(RIGHT_PANE_MODE_KEY) === "chat" ? "chat" : "agent"; } catch { return "agent"; }
-}
-
-function setRightPaneModePreference(value) {
-  try { localStorage.setItem(RIGHT_PANE_MODE_KEY, value); } catch {}
-}
+// Max chars per attached file sent to the model (head-truncated with notice).
+const MAX_ATTACH_CHARS = 12_000;
+const MAX_ATTACHMENTS = 8;
 
 function showAppToast(message, type = "info") {
   let host = document.querySelector(".ws-toast-host");
@@ -123,11 +110,9 @@ export const codeApp = {
     }
     if (!getThinking()) setThinking(true);
     els = {};
-    pythonLogs = [];
-    webLogs = [];
-    undoStack = [];
+    consoleLogs = [];
+    previewEntry = null;
     chatHistory = [];
-    rightPaneMode = getRightPaneMode();
     attachments = [];
     pendingImage = null;
     pendingImageRead = 0;
@@ -136,26 +121,13 @@ export const codeApp = {
     runner = new WebRunner(els.previewFrame, { onConsole: (level, text) => pushConsole(level, text, "web") });
     unsubModel = modelService.subscribe(() => syncState());
     unsubContext = onContextLimitChange(() => syncState());
-    // toggle listener
-    if (els.autoApproveToggle) {
-      els.autoApproveToggle.checked = getAutoApprove();
-      els.autoApproveToggle.addEventListener("change", () => setAutoApprove(els.autoApproveToggle.checked));
-    }
-    if (els.agenticModeToggle) {
-      els.agenticModeToggle.checked = getAgenticMode();
-      els.agenticModeToggle.addEventListener("change", () => setAgenticMode(els.agenticModeToggle.checked));
-    }
-    // also listen for external toggle changes
-    const unsubAuto = onAutoApproveChange((v) => { if (els.autoApproveToggle) els.autoApproveToggle.checked = !!v; updateUndoUI(); });
-    // keep for unmount (reuse unsubContext var? store separately)
-    els._unsubAuto = unsubAuto;
 
     project = await loadProject();
     explorer = createExplorer({
       container: els.explorer,
       project,
       onOpenFile: (p) => openFile(p),
-      onAskAgent: (path, kind) => handleAskAgentFromExplorer(path, kind),
+      onAskChat: (path, kind) => handleAskChatFromExplorer(path, kind),
       onAttachFile: (path) => handleAttachFile(path),
       onFilesChanged: async (info) => {
         await saveProject(project);
@@ -195,8 +167,7 @@ export const codeApp = {
           if (first) { openTabs = [first]; activePath = first; renderTabs(); await openFile(first); }
           showAppToast(`Imported ${info.count ?? ""} files`, "success");
         }
-        if (autoRun && shouldAutoPreview()) runPreview();
-        updateUndoUI();
+        if (autoRun) autoRefreshPreview();
       },
       onReset: async () => {
         try {
@@ -208,14 +179,12 @@ export const codeApp = {
           }
           openTabs = [];
           activePath = null;
-          agentHistory = [];
+          chatHistory = [];
           attachments = [];
           clearPendingImage();
           currentSelection = null;
-          undoStack = [];
-          clearAgentThread();
+          clearChatThread();
           renderAttachments();
-          updateUndoUI();
           if (editorCtrl) {
             editorSetting = true;
             try { editorCtrl.setValue("", "untitled.txt"); } catch {}
@@ -227,7 +196,7 @@ export const codeApp = {
           if (preferred) { openTabs = [preferred]; activePath = preferred; renderTabs(); await openFile(preferred); }
           else renderTabs();
           syncState();
-          if (shouldAutoPreview()) runPreview();
+          if (autoRun) autoRefreshPreview();
           showAppToast("Project reset to default template", "success");
         } catch (e) {
           showAppToast("Reset failed: " + String(e?.message ?? e), "error");
@@ -247,16 +216,25 @@ export const codeApp = {
     }
     syncState();
     renderAttachments();
-    updateUndoUI();
-    if (shouldAutoPreview()) runPreview();
+    if (autoRun) autoRefreshPreview();
+
+    // If a previous Python run never returned, the tab was frozen and reloaded.
+    // Say so, instead of leaving the user wondering why the app "just broke".
+    try {
+      const pending = localStorage.getItem(RUN_PENDING_KEY);
+      if (pending) {
+        localStorage.removeItem(RUN_PENDING_KEY);
+        const mins = Math.max(1, Math.round((Date.now() - Number(pending)) / 60000));
+        pushConsole("warn", `A previous Python run did not finish (~${mins} min ago). An endless loop blocks the browser main thread, so the tab had to be reloaded.`, "python");
+        showAppToast("Previous Python run didn't finish — an endless loop freezes the tab", "error");
+      }
+    } catch {}
   },
 
   unmount() {
     abortController?.abort();
-    cancelHumanResponse();
     unsubModel?.(); unsubModel = null;
     unsubContext?.(); unsubContext = null;
-    try { els._unsubAuto?.(); } catch {}
     try { editorCtrl?.destroy(); } catch {}
     editorCtrl = null;
     try { runner?.dispose(); } catch {}
@@ -311,38 +289,24 @@ function buildDom(root) {
           </div>
           <div class="ws-preview-view" data-role="previewView" hidden>
             <iframe class="ws-preview-frame" data-role="previewFrame" sandbox="allow-scripts allow-modals" hidden></iframe>
-            <pre class="ws-console ws-preview-console mono" data-role="webConsole" aria-label="Web preview console"></pre>
           </div>
         </div>
       </section>
-      <div class="ws-resizer-agent" data-role="agentResizer" title="Drag to resize Agent panel — double-click to reset"></div>
-      <section class="ws-pane ws-code-agent ws-pane-right" data-role="agentPane">
+      <div class="ws-resizer-agent" data-role="chatResizer" title="Drag to resize Chat panel — double-click to reset"></div>
+      <section class="ws-pane ws-code-agent ws-pane-right" data-role="chatPane">
 
         <div class="ws-pane-head">
-          <div class="ws-right-pane-tabs" role="tablist" aria-label="Right pane mode">
-            <button class="ws-right-pane-tab" data-role="rightPaneTab" data-mode="chat" role="tab" type="button">Chat</button>
-            <button class="ws-right-pane-tab active" data-role="rightPaneTab" data-mode="agent" role="tab" type="button">Agent</button>
+          <h3 style="font-size:12px; font-weight:600; color:var(--t2);">Chat with files</h3>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <button class="ws-btn ghost tiny" data-role="newChat" title="Start a new chat (clears history and attachments)">New</button>
+            <button class="ws-btn ghost tiny ws-chat-clear" data-role="clearChat" aria-label="Clear chat" title="Clear chat">× Clear</button>
           </div>
-          <button class="ws-btn ghost tiny ws-chat-clear" data-role="clearChat" aria-label="Clear chat" title="Clear chat">× Clear</button>
         </div>
-        <div class="ws-right-panel" data-role="agentPanel">
-        <div class="ws-agent-toolbar" data-role="agentHeaderActions">
-          <label class="ws-auto-toggle mono" title="Auto-approve file edits & runs without asking">
-            <input type="checkbox" data-role="autoApproveToggle" />
-            <span>Auto-approve</span>
-          </label>
-          <label class="ws-auto-toggle mono" title="When enabled, the agent continues without waiting for guidance">
-            <input type="checkbox" data-role="agenticModeToggle" />
-            <span>Agentic mode</span>
-          </label>
-          <button class="ws-btn ghost small" data-role="undoBtn" title="Undo last file change (history stack)">↩ Undo</button>
-          <button class="ws-btn ghost small" data-role="newSession">New</button>
-          <button class="ws-btn ghost small" data-role="clearAgent">Clear</button>
-        </div>
-        <div class="ws-task-list mono" data-role="taskList" hidden style="margin:8px 10px 0; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,0.25); border:1px solid var(--line-soft); font-size:11.5px;"></div>
-        <div class="ws-thread-scroll" data-role="agentScroll"><div class="ws-thread" data-role="agentThread">
-          <div class="ws-empty">Ask the agent to build, refactor, or fix.<br><br>Tools: <span class="mono">read_file · apply_patch · write_file · search · run_python · run_web</span><br><br>
-          Tip: Right-click a file → <b>Explain / Fix / Add to Agent</b> or type <span class="mono">@</span> to mention files. Select code → <b>Add selection</b>.<br><br><span class="mono" style="font-size:11px; color:var(--t4)">Auto-approve toggle controls whether edits need confirmation.</span></div>
+        <div class="ws-right-panel" data-role="chatPanel">
+        <div class="ws-thread-scroll" data-role="chatScroll"><div class="ws-thread" data-role="chatThread">
+          <div class="ws-empty">Ask about your project files.<br><br>
+          Tip: Right-click a file → <b>Explain / Review / Add to Chat</b>, type <span class="mono">@</span> to mention files, or select code → <b>Add selection</b>.<br><br>
+          <span class="mono" style="font-size:11px; color:var(--t4)">Chat is read-only — it never edits files. Copy a suggested snippet and paste it into the editor yourself.</span></div>
         </div></div>
         <div class="ws-attachments" data-role="attachmentsBar" hidden>
           <div class="ws-attachments-head mono">Attachments (<span data-role="attachCount">0</span>) <button class="ws-btn ghost tiny" data-role="clearAllAttach">Clear all</button></div>
@@ -352,43 +316,15 @@ function buildDom(root) {
           <div class="ws-selection-chip mono"><span data-role="selLabel"></span><button class="ws-btn ghost tiny" data-role="attachSel">Add selection</button><button class="ws-btn ghost tiny" data-role="clearSel">×</button></div>
           <pre class="ws-selection-preview mono" data-role="selPreview"></pre>
         </div>
-        <div class="ws-permission-card" data-role="permissionCard" hidden>
-          <div class="ws-perm-head mono"><span data-role="permTitle">Permission required</span><button class="ws-btn ghost tiny" data-role="permDismiss">×</button></div>
-          <div class="ws-perm-body mono" data-role="permBody"></div>
-          <pre class="ws-perm-diff mono" data-role="permDiff" hidden></pre>
-          <div class="ws-perm-actions">
-            <button class="ws-btn small" data-role="permDeny">Deny</button>
-            <button class="ws-btn ghost small" data-role="permAllowOnce">Allow</button>
-            <button class="ws-btn primary small" data-role="permAllowAlways">Allow & don't ask again</button>
-          </div>
-        </div>
-        <div class="ws-human-card" data-role="humanCard" hidden>
-          <div class="ws-human-head mono"><span data-role="humanTitle">Agent needs guidance</span></div>
-          <div class="ws-human-question mono" data-role="humanQuestion"></div>
-          <textarea class="ws-human-input mono" data-role="humanInput" rows="2" placeholder="Answer the agent…"></textarea>
-          <div class="ws-human-actions"><button class="ws-btn primary small" data-role="humanSubmit">Send guidance</button></div>
-        </div>
-        <div class="ws-agent-context mono" data-role="agentContext" title="Current file-context budget (based on top-bar cap + model limits)"></div>
-        <div class="ws-image-attachment" data-role="agentImageAttachment" hidden></div>
+        <div class="ws-agent-context mono" data-role="chatContext" title="Attached file context (based on top-bar cap + model limits)"></div>
+        <div class="ws-image-attachment" data-role="chatImageAttachment" hidden></div>
         <footer class="ws-composer" style="position:relative">
-          <textarea data-role="agentInput" rows="2" placeholder="Load the model first, then describe a task… (use @ to mention files; paste an image)"></textarea>
+          <textarea data-role="chatInput" rows="2" placeholder="Load the model first, then ask about your files… (use @ to mention files; paste an image)"></textarea>
           <div class="ws-mention-pop" data-role="mentionPop" hidden></div>
-          <button class="ws-btn primary" data-role="sendAgent" disabled>Send</button>
-          <button class="ws-btn danger" data-role="stopAgent" hidden>Stop</button>
+          <button class="ws-btn primary small" data-role="sendChat" disabled>Send</button>
+          <button class="ws-btn danger small" data-role="stopChat" hidden>Stop</button>
         </footer>
-        <div class="ws-agent-status mono" data-role="agentStatus"></div>
-        </div>
-        <div class="ws-right-panel" data-role="chatPanel" hidden>
-          <div class="ws-thread-scroll" data-role="chatScroll"><div class="ws-thread" data-role="chatThread">
-            <div class="ws-empty">Ask Gemma a question without changing project files.</div>
-          </div></div>
-          <div class="ws-image-attachment" data-role="chatImageAttachment" hidden></div>
-          <footer class="ws-composer" style="position:relative">
-            <textarea data-role="chatInput" rows="2" placeholder="Ask Gemma anything… (paste an image)"></textarea>
-            <button class="ws-btn primary small" data-role="sendChat" disabled>Send</button>
-            <button class="ws-btn danger small" data-role="stopChat" hidden>Stop</button>
-          </footer>
-          <div class="ws-agent-status mono" data-role="chatStatus"></div>
+        <div class="ws-agent-status mono" data-role="chatStatus"></div>
         </div>
       </section>
     </div>
@@ -398,8 +334,8 @@ function buildDom(root) {
   Object.assign(els, {
     root: wrap,
     codeLayout: wrap.querySelector('[data-role="codeLayout"]'),
-    agentResizer: wrap.querySelector('[data-role="agentResizer"]'),
-    agentPane: wrap.querySelector('[data-role="agentPane"]'),
+    chatResizer: wrap.querySelector('[data-role="chatResizer"]'),
+    chatPane: wrap.querySelector('[data-role="chatPane"]'),
     explorer: wrap.querySelector('[data-role="explorer"]'),
     tabs: wrap.querySelector('[data-role="tabs"]'),
     editorWrap: wrap.querySelector('[data-role="editorWrap"]'),
@@ -413,7 +349,6 @@ function buildDom(root) {
     consoleContainer: wrap.querySelector('[data-role="consoleContainer"]'),
     outConsole: wrap.querySelector('[data-role="console"]'),
     previewView: wrap.querySelector('[data-role="previewView"]'),
-    webConsole: wrap.querySelector('[data-role="webConsole"]'),
     consoleInputRow: wrap.querySelector('[data-role="consoleInputRow"]'),
     consoleInput: wrap.querySelector('[data-role="consoleInput"]'),
     liveKeysToggle: wrap.querySelector('[data-role="liveKeysToggle"]'),
@@ -424,20 +359,8 @@ function buildDom(root) {
     stopPyBtn: wrap.querySelector('[data-role="stopPyBtn"]'),
     pkgBtn: wrap.querySelector('[data-role="pkgBtn"]'),
     runStatus: wrap.querySelector('[data-role="runStatus"]'),
-    taskList: wrap.querySelector('[data-role="taskList"]'),
-    agentScroll: wrap.querySelector('[data-role="agentScroll"]'),
-    agentThread: wrap.querySelector('[data-role="agentThread"]'),
-    agentInput: wrap.querySelector('[data-role="agentInput"]'),
     mentionPop: wrap.querySelector('[data-role="mentionPop"]'),
-    sendAgent: wrap.querySelector('[data-role="sendAgent"]'),
-    stopAgent: wrap.querySelector('[data-role="stopAgent"]'),
-    newSession: wrap.querySelector('[data-role="newSession"]'),
-    clearAgent: wrap.querySelector('[data-role="clearAgent"]'),
-    autoApproveToggle: wrap.querySelector('[data-role="autoApproveToggle"]'),
-    agenticModeToggle: wrap.querySelector('[data-role="agenticModeToggle"]'),
-    agentHeaderActions: wrap.querySelector('[data-role="agentHeaderActions"]'),
-    rightPaneTabs: wrap.querySelectorAll('[data-role="rightPaneTab"]'),
-    agentPanel: wrap.querySelector('[data-role="agentPanel"]'),
+    newChat: wrap.querySelector('[data-role="newChat"]'),
     chatPanel: wrap.querySelector('[data-role="chatPanel"]'),
     chatScroll: wrap.querySelector('[data-role="chatScroll"]'),
     chatThread: wrap.querySelector('[data-role="chatThread"]'),
@@ -446,7 +369,6 @@ function buildDom(root) {
     stopChat: wrap.querySelector('[data-role="stopChat"]'),
     clearChat: wrap.querySelector('[data-role="clearChat"]'),
     chatStatus: wrap.querySelector('[data-role="chatStatus"]'),
-    undoBtn: wrap.querySelector('[data-role="undoBtn"]'),
     attachmentsBar: wrap.querySelector('[data-role="attachmentsBar"]'),
     attachmentsList: wrap.querySelector('[data-role="attachmentsList"]'),
     attachCount: wrap.querySelector('[data-role="attachCount"]'),
@@ -456,35 +378,13 @@ function buildDom(root) {
     selPreview: wrap.querySelector('[data-role="selPreview"]'),
     attachSel: wrap.querySelector('[data-role="attachSel"]'),
     clearSel: wrap.querySelector('[data-role="clearSel"]'),
-    permissionCard: wrap.querySelector('[data-role="permissionCard"]'),
-    permTitle: wrap.querySelector('[data-role="permTitle"]'),
-    permBody: wrap.querySelector('[data-role="permBody"]'),
-    permDiff: wrap.querySelector('[data-role="permDiff"]'),
-    permDeny: wrap.querySelector('[data-role="permDeny"]'),
-    permAllowOnce: wrap.querySelector('[data-role="permAllowOnce"]'),
-    permAllowAlways: wrap.querySelector('[data-role="permAllowAlways"]'),
-    permDismiss: wrap.querySelector('[data-role="permDismiss"]'),
-    humanCard: wrap.querySelector('[data-role="humanCard"]'),
-    humanTitle: wrap.querySelector('[data-role="humanTitle"]'),
-    humanQuestion: wrap.querySelector('[data-role="humanQuestion"]'),
-    humanInput: wrap.querySelector('[data-role="humanInput"]'),
-    humanSubmit: wrap.querySelector('[data-role="humanSubmit"]'),
-    agentStatus: wrap.querySelector('[data-role="agentStatus"]'),
-    agentContext: wrap.querySelector('[data-role="agentContext"]'),
-    agentImageAttachment: wrap.querySelector('[data-role="agentImageAttachment"]'),
+    chatContext: wrap.querySelector('[data-role="chatContext"]'),
     chatImageAttachment: wrap.querySelector('[data-role="chatImageAttachment"]'),
   });
 
 
-  threadView = createChatThread({ scrollEl: els.agentScroll, threadEl: els.agentThread, userLabel: "You", assistantLabel: "Agent" });
   chatThreadView = createChatThread({ scrollEl: els.chatScroll, threadEl: els.chatThread, userLabel: "You", assistantLabel: "Gemma" });
-
-  setRightPaneMode(rightPaneMode, true);
-
-  els.agentScroll.addEventListener("scroll", () => {
-    const el = els.agentScroll;
-    userScrolledUp = (el.scrollHeight - el.scrollTop - el.clientHeight) > 80;
-  }, { passive: true });
+  decorateChatThreadCopy();
 
   // tabs + out
   els.runBtn.addEventListener("click", () => runActive());
@@ -534,79 +434,46 @@ function buildDom(root) {
 
 
   els.clearOut.addEventListener("click", () => {
+    consoleLogs = [];
     els.outConsole.replaceChildren();
-    if (consoleSource === "web" || currentRunnerMode === "preview") {
-      webLogs = [];
-      renderWebConsole();
-    }
-    else pythonLogs = [];
   });
   els.outTabs.forEach(t => t.addEventListener("click", () => switchOut(t.dataset.out)));
 
 
-  // agent composers
-  els.rightPaneTabs.forEach(tab => tab.addEventListener("click", () => setRightPaneMode(tab.dataset.mode)));
-  els.sendAgent.addEventListener("click", () => sendToAgent());
-  els.stopAgent.addEventListener("click", () => {
-    cancelHumanResponse();
-    abortController?.abort();
-  });
-  els.agentInput.addEventListener("keydown", (e) => {
-    if (handleMentionKeydown(e)) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendAgent.disabled) sendToAgent(); }
-  });
-  els.agentInput.addEventListener("input", () => { syncState(); autoGrowAgent(); handleMentionInput(); });
-  els.agentInput.addEventListener("paste", handleImagePaste);
-  els.agentInput.addEventListener("blur", () => setTimeout(hideMentionPop, 150));
-  els.agentInput.addEventListener("click", () => handleMentionInput());
+  // chat composer
   els.sendChat.addEventListener("click", () => sendToChat());
   els.stopChat.addEventListener("click", () => abortController?.abort());
   els.clearChat.addEventListener("click", () => {
     abortController?.abort();
-    chatHistory = [];
-    els.chatThread.replaceChildren();
-    const empty = document.createElement("div");
-    empty.className = "ws-empty";
-    empty.textContent = "Ask Gemma a question without changing project files.";
-    els.chatThread.appendChild(empty);
+    clearChatThread();
     els.chatStatus.textContent = "Chat history cleared.";
     els.sendChat.disabled = !modelService.ready;
   });
+  els.newChat?.addEventListener("click", () => {
+    abortController?.abort();
+    clearChatThread();
+    attachments = [];
+    clearPendingImage();
+    renderAttachments();
+    els.chatInput.value = "";
+    hideMentionPop();
+    autoGrowChat();
+    els.chatStatus.textContent = "New chat — history and attachments cleared.";
+    syncState();
+  });
   els.chatInput.addEventListener("keydown", (e) => {
+    if (handleMentionKeydown(e)) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendChat.disabled) sendToChat(); }
   });
-  els.chatInput.addEventListener("input", () => { syncState(); autoGrowChat(); });
+  els.chatInput.addEventListener("input", () => { syncState(); autoGrowChat(); handleMentionInput(); });
   els.chatInput.addEventListener("paste", handleImagePaste);
-  els.clearAgent.addEventListener("click", () => {
-    abortController?.abort();
-    cancelHumanResponse();
-    agentHistory = [];
-    undoStack = [];
-    clearAgentThread();
-    attachments = [];
-    clearPendingImage();
-    renderAttachments();
-    updateUndoUI();
-    els.agentStatus.textContent = "Agent history and undo stack cleared.";
-  });
-  els.newSession.addEventListener("click", () => {
-    abortController?.abort();
-    cancelHumanResponse();
-    agentHistory = [];
-    undoStack = [];
-    clearAgentThread();
-    attachments = [];
-    clearPendingImage();
-    renderAttachments();
-    updateUndoUI();
-    els.agentStatus.textContent = "New session — history and undo stack cleared.";
-  });
-  els.clearAllAttach.addEventListener("click", () => { attachments = []; clearPendingImage(); renderAttachments(); });
-  els.undoBtn.addEventListener("click", () => doUndo());
+  els.chatInput.addEventListener("blur", () => setTimeout(hideMentionPop, 150));
+  els.chatInput.addEventListener("click", () => handleMentionInput());
+  els.clearAllAttach.addEventListener("click", () => { attachments = []; clearPendingImage(); renderAttachments(); syncState(); });
   els.attachSel.addEventListener("click", () => {
     if (currentSelection?.text) {
       addAttachment({ path: currentSelection.path, text: currentSelection.text });
-      els.agentInput.focus();
+      els.chatInput.focus();
     }
   });
   els.clearSel.addEventListener("click", () => {
@@ -616,23 +483,10 @@ function buildDom(root) {
     if (!currentSelection) els.selectionBar.hidden = true;
   });
 
-  // permission card dismiss
-  els.permDismiss.addEventListener("click", () => hidePermissionCard("deny"));
-  els.permDeny.addEventListener("click", () => hidePermissionCard("deny"));
-  els.permAllowOnce.addEventListener("click", () => hidePermissionCard("allow"));
-  els.permAllowAlways.addEventListener("click", () => hidePermissionCard("allow_always"));
-  els.humanSubmit.addEventListener("click", () => resolveHumanResponse(els.humanInput.value));
-  els.humanInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      resolveHumanResponse(els.humanInput.value);
-    }
-  });
-
   // selection bar initially hidden
   renderAttachments();
   renderPendingImage();
-  autoGrowAgent();
+  autoGrowChat();
 
   // ----- bottom bar resizer / collapsible -----
   initOutLayout();
@@ -683,64 +537,64 @@ function buildDom(root) {
     els.toggleOut.addEventListener("click", () => setOutCollapsed(!outCollapsed));
   }
 
-  // ----- agent column resizer -----
-  if (els.agentResizer && els.codeLayout && els.agentPane) {
-    const AGENT_WIDTH_KEY = "gemma_agent_col_width";
+  // ----- chat column resizer -----
+  if (els.chatResizer && els.codeLayout && els.chatPane) {
+    const CHAT_WIDTH_KEY = "gemma_chat_col_width";
     try {
-      const savedW = Number(localStorage.getItem(AGENT_WIDTH_KEY));
+      const savedW = Number(localStorage.getItem(CHAT_WIDTH_KEY));
       if (Number.isFinite(savedW) && savedW >= 240 && savedW <= window.innerWidth * 0.75) {
         els.codeLayout.style.setProperty("--agent-width", `${savedW}px`);
       }
     } catch {}
 
-    let draggingAgent = false;
+    let draggingChat = false;
     let startX = 0;
     let startW = 400;
 
-    const onAgentMove = (e) => {
-      if (!draggingAgent) return;
+    const onChatMove = (e) => {
+      if (!draggingChat) return;
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const dx = startX - clientX;
       const newW = Math.max(260, Math.min(window.innerWidth * 0.7, startW + dx));
       els.codeLayout.style.setProperty("--agent-width", `${Math.round(newW)}px`);
     };
 
-    const onAgentUp = () => {
-      if (!draggingAgent) return;
-      draggingAgent = false;
-      els.agentResizer.classList.remove("dragging");
+    const onChatUp = () => {
+      if (!draggingChat) return;
+      draggingChat = false;
+      els.chatResizer.classList.remove("dragging");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
-      window.removeEventListener("mousemove", onAgentMove);
-      window.removeEventListener("mouseup", onAgentUp);
-      window.removeEventListener("touchmove", onAgentMove);
-      window.removeEventListener("touchend", onAgentUp);
+      window.removeEventListener("mousemove", onChatMove);
+      window.removeEventListener("mouseup", onChatUp);
+      window.removeEventListener("touchmove", onChatMove);
+      window.removeEventListener("touchend", onChatUp);
       const curW = parseInt(els.codeLayout.style.getPropertyValue("--agent-width") || "400", 10);
       if (curW) {
-        try { localStorage.setItem(AGENT_WIDTH_KEY, String(curW)); } catch {}
+        try { localStorage.setItem(CHAT_WIDTH_KEY, String(curW)); } catch {}
       }
       if (editorCtrl) try { editorCtrl.view.requestMeasure(); } catch {}
     };
 
-    const onAgentDown = (e) => {
+    const onChatDown = (e) => {
       e.preventDefault();
-      draggingAgent = true;
+      draggingChat = true;
       startX = e.touches ? e.touches[0].clientX : e.clientX;
-      startW = els.agentPane.offsetWidth || 400;
-      els.agentResizer.classList.add("dragging");
+      startW = els.chatPane.offsetWidth || 400;
+      els.chatResizer.classList.add("dragging");
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
-      window.addEventListener("mousemove", onAgentMove);
-      window.addEventListener("mouseup", onAgentUp);
-      window.addEventListener("touchmove", onAgentMove, { passive: false });
-      window.addEventListener("touchend", onAgentUp);
+      window.addEventListener("mousemove", onChatMove);
+      window.addEventListener("mouseup", onChatUp);
+      window.addEventListener("touchmove", onChatMove, { passive: false });
+      window.addEventListener("touchend", onChatUp);
     };
 
-    els.agentResizer.addEventListener("mousedown", onAgentDown);
-    els.agentResizer.addEventListener("touchstart", onAgentDown, { passive: false });
-    els.agentResizer.addEventListener("dblclick", () => {
+    els.chatResizer.addEventListener("mousedown", onChatDown);
+    els.chatResizer.addEventListener("touchstart", onChatDown, { passive: false });
+    els.chatResizer.addEventListener("dblclick", () => {
       els.codeLayout.style.setProperty("--agent-width", "400px");
-      try { localStorage.setItem(AGENT_WIDTH_KEY, "400"); } catch {}
+      try { localStorage.setItem(CHAT_WIDTH_KEY, "400"); } catch {}
       if (editorCtrl) try { editorCtrl.view.requestMeasure(); } catch {}
     });
   }
@@ -777,61 +631,70 @@ function buildDom(root) {
   els.setOutCollapsed = setOutCollapsed;
 }
 
-function autoGrowAgent() {
-  els.agentInput.style.height = "auto";
-  els.agentInput.style.height = Math.min(els.agentInput.scrollHeight, 140) + "px";
-}
-
 function autoGrowChat() {
+  if (!els.chatInput) return;
   els.chatInput.style.height = "auto";
   els.chatInput.style.height = Math.min(els.chatInput.scrollHeight, 140) + "px";
 }
 
-function setRightPaneMode(mode, silent = false) {
-  if (generating && mode !== rightPaneMode) return;
-  rightPaneMode = mode === "chat" ? "chat" : "agent";
-  if (!silent) setRightPaneModePreference(rightPaneMode);
-  const chat = rightPaneMode === "chat";
-  els.agentHeaderActions.hidden = chat;
-  els.clearChat.hidden = !chat;
-  els.agentPanel.hidden = chat;
-  els.chatPanel.hidden = !chat;
-  els.rightPaneTabs.forEach(tab => {
-    const active = tab.dataset.mode === rightPaneMode;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
-  });
-  syncState();
-}
-
 let autoRun = true;
 
+// Which runtime a file belongs to. Only files that are directly runnable get a
+// runner: Python scripts run in Pyodide, HTML documents render in the preview.
+// Everything else (CSS, JS, Markdown, …) is edited, not "run".
 function runnerForPath(path) {
   const low = String(path || "").toLowerCase();
   if (low.endsWith(".py") || low.endsWith(".pyw")) return "python";
-  if (low.endsWith(".html") || low.endsWith(".htm") || low.endsWith(".css") || low.endsWith(".js") || low.endsWith(".mjs")) return "web";
+  if (low.endsWith(".html") || low.endsWith(".htm")) return "web";
   return "none";
 }
 
-function shouldAutoPreview() {
+// True when `path` is referenced (src/href) by the HTML currently in the preview
+// pane. Lets a stylesheet/script update the page it belongs to without ever
+// switching the preview to a different entry file.
+function isDependencyOfEntry(path) {
+  if (!previewEntry || !path || !project?.has(previewEntry)) return false;
+  const html = project.getContent(previewEntry) ?? "";
+  const want = basename(path).toLowerCase();
+  const refRe = /(?:src|href)\s*=\s*["']([^"']+)["']/gi;
+  for (const m of html.matchAll(refRe)) {
+    const ref = String(m[1] || "").split(/[?#]/)[0];
+    if (!ref || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(ref) || /^[a-z][a-z0-9+.-]*:/i.test(ref)) continue;
+    if (basename(ref.replace(/^\.\//, "")).toLowerCase() === want) return true;
+  }
+  return false;
+}
+
+// Refresh after an edit. Re-renders the active HTML file, or — when the edited
+// file is an asset of the page already on screen — re-renders that same page.
+// Never silently previews an unrelated entry file.
+function autoRefreshPreview() {
   if (!activePath) return false;
-  return runnerForPath(activePath) === "web";
+  if (runnerForPath(activePath) === "web") {
+    runPreview(activePath);
+    return true;
+  }
+  if (previewEntry && project?.has(previewEntry) && isDependencyOfEntry(activePath)) {
+    runPreview(previewEntry);
+    return true;
+  }
+  return false;
 }
 
 function syncState() {
   const ready = modelService.ready;
-  const chat = rightPaneMode === "chat";
-  const input = chat ? els.chatInput : els.agentInput;
-  const sendButton = chat ? els.sendChat : els.sendAgent;
-  const hasText = !!input.value.trim() || !!pendingImage || (!chat && attachments.length > 0);
-  sendButton.disabled = !ready || generating || !hasText;
-  els.agentInput.placeholder = !ready ? "Load the model to talk to the agent… (use @ to mention files; paste an image)" : activePath ? `Ask about ${activePath}… (@ to mention; paste an image)` : "Describe a task… (@ to mention files; paste an image)";
-  els.chatInput.placeholder = !ready ? "Load the model to start chatting… (paste an image)" : "Ask Gemma anything… (paste an image)";
+  if (!els.chatInput || !els.sendChat) return;
+  const hasText = !!els.chatInput.value.trim() || !!pendingImage || attachments.length > 0;
+  els.sendChat.disabled = !ready || generating || !hasText;
+  els.chatInput.placeholder = !ready
+    ? "Load the model to start chatting… (use @ to mention files; paste an image)"
+    : activePath
+      ? `Ask about ${activePath}… (@ to mention; paste an image)`
+      : "Ask about your files… (@ to mention files; paste an image)";
   // Run button state is managed by refreshBottomBar (file-type derived); just handle generating lock
   if (generating && els.runBtn) els.runBtn.disabled = true;
   else refreshBottomBar();
-  if (els.runStatus) els.runStatus.textContent = isPyodideLoaded() ? "Py ready" : "";
-  if (els.agentContext) {
+  if (els.chatContext) {
     const arch = Number(modelService.capabilities?.architecturalMax) || 131072;
     const eff = Number(modelService.capabilities?.effectiveContextMax) || arch;
     const capPref = getContextLimitPreference();
@@ -840,22 +703,11 @@ function syncState() {
     const stats = project?.getStats();
     const approxTokens = stats ? Math.ceil(stats.totalChars * 0.25) : 0;
     const label = capPref === "auto" ? "Auto" : `${(cap/1024).toFixed(0)}K`;
-    els.agentContext.textContent = `Files ~${approxTokens.toLocaleString()} tokens · cap ${label} · effective ${(effCapped/1024).toFixed(0)}K${attachments.length?` · ${attachments.length} attached`: ""} · ${undoStack.length?`${undoStack.length} undo`: "no undo"}`;
+    els.chatContext.textContent = `Files ~${approxTokens.toLocaleString()} tokens · cap ${label} · effective ${(effCapped/1024).toFixed(0)}K${attachments.length ? ` · ${attachments.length} attached` : ""}`;
   }
-  els.stopAgent.hidden = chat || !generating;
-  els.sendAgent.hidden = chat || generating;
-  els.stopChat.hidden = !chat || !generating;
-  els.sendChat.hidden = !chat || generating;
-  els.agentInput.disabled = chat || !ready || generating;
-  els.chatInput.disabled = !chat || !ready || generating;
-  updateUndoUI();
-}
-
-function updateUndoUI(){
-  if (!els.undoBtn) return;
-  els.undoBtn.disabled = undoStack.length === 0 || generating;
-  els.undoBtn.title = undoStack.length ? `Undo last change (${undoStack.length} in stack)` : "Nothing to undo";
-  els.undoBtn.textContent = undoStack.length ? `↩ Undo (${undoStack.length})` : "↩ Undo";
+  els.stopChat.hidden = !generating;
+  els.sendChat.hidden = generating;
+  els.chatInput.disabled = !ready || generating;
 }
 
 function handleImagePaste(event) {
@@ -893,27 +745,26 @@ function clearPendingImage() {
 }
 
 function renderPendingImage() {
-  const hosts = [els.agentImageAttachment, els.chatImageAttachment].filter(Boolean);
-  for (const host of hosts) {
-    host.replaceChildren();
-    host.hidden = !pendingImage;
-    if (!pendingImage) continue;
-    const chip = document.createElement("div");
-    chip.className = "ws-image-chip";
-    const img = document.createElement("img");
-    img.src = pendingImage.url;
-    img.alt = "";
-    const name = document.createElement("span");
-    name.textContent = pendingImage.name || "pasted image";
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "ws-btn ghost tiny";
-    remove.textContent = "×";
-    remove.title = "Remove image";
-    remove.addEventListener("click", clearPendingImage);
-    chip.append(img, name, remove);
-    host.appendChild(chip);
-  }
+  const host = els.chatImageAttachment;
+  if (!host) return;
+  host.replaceChildren();
+  host.hidden = !pendingImage;
+  if (!pendingImage) return;
+  const chip = document.createElement("div");
+  chip.className = "ws-image-chip";
+  const img = document.createElement("img");
+  img.src = pendingImage.url;
+  img.alt = "";
+  const name = document.createElement("span");
+  name.textContent = pendingImage.name || "pasted image";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ws-btn ghost tiny";
+  remove.textContent = "×";
+  remove.title = "Remove image";
+  remove.addEventListener("click", clearPendingImage);
+  chip.append(img, name, remove);
+  host.appendChild(chip);
 }
 
 // ---- Attachments ----
@@ -925,7 +776,7 @@ function addAttachment({path, text}){
   // dedup
   if (attachments.some(a=>a.path===norm)) { showAppToast(`Already attached: ${norm}`, "info"); return; }
   // cap
-  if (attachments.length >= 8) { showAppToast("Max 8 attachments — remove one first", "error"); return; }
+  if (attachments.length >= MAX_ATTACHMENTS) { showAppToast(`Max ${MAX_ATTACHMENTS} attachments — remove one first`, "error"); return; }
   attachments.push({path: norm, text: content});
   renderAttachments();
   syncState();
@@ -977,7 +828,7 @@ function handleAttachFile(path){
 // ---- @ mentions ----
 
 function handleMentionInput(){
-  const input=els.agentInput;
+  const input = els.chatInput;
   if (!input || !project) return;
   const cursor=input.selectionStart ?? input.value.length;
   const before=input.value.slice(0,cursor);
@@ -1018,7 +869,7 @@ function hideMentionPop(){
 
 function completeMention(path){
   if (!mentionState) return;
-  const input=els.agentInput;
+  const input = els.chatInput;
   const before=input.value.slice(0, mentionState.start);
   const after=input.value.slice(mentionState.end);
   const insert=`@${path} `;
@@ -1030,7 +881,7 @@ function completeMention(path){
   // auto attach
   handleAttachFile(path);
   syncState();
-  autoGrowAgent();
+  autoGrowChat();
   input.focus();
 }
 
@@ -1055,8 +906,8 @@ function resolveMentionsInText(text){
   const uniq=[...new Set(mentions)].map(p=> normalizePathExport(p)).filter(p=> project?.has(p));
   for(const p of uniq){
     if(!attachments.some(a=>a.path===p)){
-      // silently attach (cap 8)
-      if(attachments.length<8){
+      // silently attach (cap MAX_ATTACHMENTS)
+      if(attachments.length<MAX_ATTACHMENTS){
         const content=project.getContent(p) ?? "";
         if(content) attachments.push({path:p, text: content});
       }
@@ -1064,27 +915,27 @@ function resolveMentionsInText(text){
   }
 }
 
-function handleAskAgentFromExplorer(path, kind){
+function handleAskChatFromExplorer(path, kind){
   const promptMap={
     explain: `Explain what @${path} does. Include key functions and how it interacts with other files.`,
-    fix: `Review @${path} for bugs and fix them. Keep style consistent. After fixing, verify with the appropriate runner (run_python for .py, run_web for web files).`,
+    fix: `Review @${path} for bugs and suggest specific fixes with corrected code snippets. I will apply the changes myself.`,
     explain_folder: `Explain the purpose of the folder @${path} and how its files work together.`
   };
   const text=promptMap[kind] || `Help with @${path}`;
   // attach
   handleAttachFile(path);
-  els.agentInput.value=text;
-  syncState(); autoGrowAgent();
-  els.agentInput.focus();
+  els.chatInput.value=text;
+  syncState(); autoGrowChat();
+  els.chatInput.focus();
   // flash
-  els.agentInput.animate([{outline:"2px solid rgba(100,255,160,0.4)"},{outline:"2px solid transparent"}], {duration:400});
+  els.chatInput.animate([{outline:"2px solid rgba(100,255,160,0.4)"},{outline:"2px solid transparent"}], {duration:400});
 }
 
 // ---- Editor handling ----
 
 async function ensureEditor() {
   if (editorCtrl) return editorCtrl;
-  editorCtrl = await createEditor(els.editorHost, {
+  const opts = {
     value: "",
     path: activePath || "untitled.txt",
     onChange: (text) => {
@@ -1093,9 +944,9 @@ async function ensureEditor() {
       try { project.set(activePath, text); } catch (e) { console.warn(e); }
       clearTimeout(saveDebounce);
       saveDebounce = setTimeout(() => saveProject(project).catch(()=>{}), 550);
-      if (autoRun && shouldAutoPreview()) {
+      if (autoRun) {
         clearTimeout(editorCtrl._autoRunTimer);
-        editorCtrl._autoRunTimer = setTimeout(() => runPreview(), 750);
+        editorCtrl._autoRunTimer = setTimeout(() => autoRefreshPreview(), 750);
       }
     },
     onSelection: (sel) => {
@@ -1114,8 +965,70 @@ async function ensureEditor() {
       els.selPreview.textContent = snippet.slice(0, 600);
       els.selectionBar.hidden = false;
     }
-  });
+  };
+  try {
+    editorCtrl = await createEditor(els.editorHost, opts);
+  } catch (err) {
+    console.warn("[code] CodeMirror failed — using plain-text fallback editor", err);
+    showAppToast("Syntax editor failed to load — using plain text mode", "error");
+    editorCtrl = createFallbackEditor(els.editorHost, opts);
+  }
   return editorCtrl;
+}
+
+// Plain-textarea stand-in with the same controller surface as the CodeMirror
+// wrapper. Keeps editing, selection-attach, and runners working when the
+// CodeMirror CDN fails (e.g. duplicate @codemirror/state instances).
+function createFallbackEditor(container, { value = "", onChange, onSelection } = {}) {
+  container.replaceChildren();
+  const ta = document.createElement("textarea");
+  ta.className = "ws-fallback-editor mono";
+  ta.value = String(value ?? "");
+  ta.spellcheck = false;
+  ta.setAttribute("aria-label", "File editor (plain text fallback)");
+  ta.style.cssText = "width:100%;height:100%;min-height:200px;resize:none;background:rgba(255,255,255,.015);border:0;outline:none;color:var(--t1);font-size:13px;line-height:1.6;padding:10px 12px;";
+  container.appendChild(ta);
+  const emitSelection = () => {
+    const s = ta.selectionStart ?? 0, e = ta.selectionEnd ?? 0;
+    if (e > s) onSelection?.({ text: ta.value.slice(s, e), from: s, to: e, empty: false });
+    else onSelection?.({ text: "", from: s, to: e, empty: true });
+  };
+  let selTimer = 0;
+  ta.addEventListener("input", () => {
+    onChange?.(ta.value);
+    clearTimeout(selTimer);
+    selTimer = setTimeout(emitSelection, 300);
+  });
+  ta.addEventListener("select", emitSelection);
+  ta.addEventListener("keyup", emitSelection);
+  return {
+    view: { requestMeasure() {} },
+    getValue() { return ta.value; },
+    setValue(text) {
+      const t = String(text ?? "");
+      if (ta.value !== t) ta.value = t;
+    },
+    setLanguage() {},
+    focus() { try { ta.focus(); } catch {} },
+    getSelection() {
+      const s = ta.selectionStart ?? 0, e = ta.selectionEnd ?? 0;
+      return { text: e > s ? ta.value.slice(s, e) : "", from: s, to: e, empty: e <= s };
+    },
+    setSelection(from, to) { try { ta.setSelectionRange(from, to); ta.focus(); } catch {} },
+    insertAtCursor(snippet) {
+      const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s;
+      const next = ta.value.slice(0, s) + String(snippet ?? "") + ta.value.slice(e);
+      ta.value = next;
+      try { ta.setSelectionRange(s + String(snippet ?? "").length, s + String(snippet ?? "").length); } catch {}
+      onChange?.(ta.value);
+      ta.focus();
+    },
+    replaceRange(from, to, text) {
+      ta.value = ta.value.slice(0, from) + String(text ?? "") + ta.value.slice(to);
+      onChange?.(ta.value);
+    },
+    destroy() { clearTimeout(selTimer); ta.remove(); },
+  };
 }
 
 async function openFile(path) {
@@ -1127,16 +1040,24 @@ async function openFile(path) {
   activePath = p;
   if (!openTabs.includes(p)) openTabs.push(p);
   renderTabs();
+  // An editor failure (e.g. a syntax-highlighter crash) must never stop the
+  // file from opening or the bottom pane from switching to the right runner.
   const ctrl = await ensureEditor();
   const content = project.getContent(p) ?? "";
   editorSetting = true;
-  try { ctrl.setValue(content, p); } finally { setTimeout(() => { editorSetting = false; }, 0); }
-  ctrl.focus();
+  try {
+    ctrl.setValue(content, p);
+  } catch (err) {
+    console.warn("[code] editor update failed for", p, err);
+  } finally {
+    setTimeout(() => { editorSetting = false; }, 0);
+  }
+  try { ctrl.focus(); } catch {}
   syncState();
   explorer.setSelected(p);
   const mode = runnerForPath(p);
-  if (mode === "web") switchOut("preview", "web");
-  else if (mode === "python") switchOut("console", "python");
+  if (mode === "web") switchOut("preview");
+  else if (mode === "python") switchOut("console");
   else refreshBottomBar();
 }
 
@@ -1178,7 +1099,8 @@ function renderTabs() {
 // ---- Console / Preview ----
 
 let currentRunnerMode = "console"; // "console" | "preview"
-let consoleSource = "python"; // "python" | "web"
+
+const MAX_CONSOLE_LINES = 600;
 
 function refreshBottomBar() {
   const runner = runnerForPath(activePath);
@@ -1188,15 +1110,17 @@ function refreshBottomBar() {
   if (els.runBtn) {
     if (isPython) {
       els.runBtn.textContent = "▶ Run Python";
-      els.runBtn.title = "Run active Python script in Pyodide";
+      els.runBtn.title = "Run the active Python file in Pyodide";
       els.runBtn.disabled = generating ? true : false;
     } else if (isWeb) {
       els.runBtn.textContent = "🔄 Refresh Preview";
-      els.runBtn.title = "Render and refresh HTML preview";
+      els.runBtn.title = `Render ${basename(activePath)} in the sandboxed preview`;
       els.runBtn.disabled = generating ? true : false;
     } else {
       els.runBtn.textContent = "▶ Run";
-      els.runBtn.title = activePath ? "No runner for this file type" : "Open a file to run";
+      els.runBtn.title = activePath
+        ? `${basename(activePath)} has no runner — open a .py or .html file`
+        : "Open a file to run";
       els.runBtn.disabled = true;
     }
   }
@@ -1211,75 +1135,48 @@ function refreshBottomBar() {
   if (els.runStatus) {
     if (isPython) els.runStatus.textContent = "Python";
     else if (isWeb) els.runStatus.textContent = "Web";
-    else els.runStatus.textContent = "";
+    else els.runStatus.textContent = "No runner";
   }
 }
 
-function switchOut(which, source = null) {
-  const previousMode = currentRunnerMode;
+function switchOut(which) {
   currentRunnerMode = which;
-  if (source) consoleSource = source;
-  else if (which === "preview") consoleSource = "web";
-  else if (previousMode === "preview") consoleSource = "web";
-  else if (runnerForPath(activePath) !== "none") consoleSource = runnerForPath(activePath);
   ensureOutExpanded();
   els.outTabs.forEach(t => t.classList.toggle("active", t.dataset.out === which));
   const isConsole = which === "console";
   if (els.consoleContainer) els.consoleContainer.hidden = !isConsole;
   if (els.previewView) els.previewView.hidden = isConsole;
   if (els.previewFrame) els.previewFrame.hidden = isConsole;
-  // Restore the correct buffer for the visible pane
-  if (els.outConsole) {
-    els.outConsole.replaceChildren();
-    const consoleLogs = consoleSource === "web" ? webLogs : pythonLogs;
-    const logs = isConsole ? consoleLogs : webLogs;
-    for (const entry of logs) {
-      const line = document.createElement("div");
-      line.className = `ws-console-line ${entry.level}`;
-      line.textContent = `[${entry.level}] ${entry.text}`;
-      els.outConsole.appendChild(line);
-    }
-    try { els.outConsole.scrollTop = els.outConsole.scrollHeight; } catch {}
-  }
-  renderWebConsole();
+  if (isConsole) renderConsole();
   refreshBottomBar();
 }
 
-function renderWebConsole() {
-  if (!els.webConsole) return;
-  els.webConsole.replaceChildren();
-  for (const entry of webLogs) {
-    const line = document.createElement("div");
-    line.className = `ws-console-line ${entry.level}`;
-    line.textContent = `[${entry.level}] ${entry.text}`;
-    els.webConsole.appendChild(line);
-  }
-  try { els.webConsole.scrollTop = els.webConsole.scrollHeight; } catch {}
+// The Console tab is the single home for runtime output — Python stdout/stderr
+// and web preview console.* both land here.
+function renderConsole() {
+  if (!els.outConsole) return;
+  els.outConsole.replaceChildren();
+  for (const entry of consoleLogs) els.outConsole.appendChild(consoleLine(entry));
+  try { els.outConsole.scrollTop = els.outConsole.scrollHeight; } catch {}
+}
+
+function consoleLine(entry) {
+  const line = document.createElement("div");
+  line.className = `ws-console-line ${entry.level} ws-console-${entry.source}`;
+  line.textContent = `[${entry.level}] ${entry.text}`;
+  return line;
 }
 
 function pushConsole(level, text, source) {
   const src = source || (runnerForPath(activePath) === "web" ? "web" : "python");
-  const entry = { level, text };
-  if (src === "web") {
-    webLogs.push(entry);
-    if (webLogs.length > 400) webLogs.shift();
-    renderWebConsole();
-  } else {
-    pythonLogs.push(entry);
-    if (pythonLogs.length > 400) pythonLogs.shift();
-  }
-  // Only render to DOM if the relevant pane is visible
-  const isConsoleVisible = currentRunnerMode === "console";
-  // Always render python to console pane when console is visible; web logs render when preview visible
-  // For simplicity, render to outConsole only when console pane is active
-  if (!els.outConsole) return;
-  if (src === "python" && (!isConsoleVisible || consoleSource !== "python")) return;
-  if (src === "web" && (isConsoleVisible ? consoleSource !== "web" : true)) return;
+  const entry = { level, text, source: src };
+  consoleLogs.push(entry);
+  if (consoleLogs.length > MAX_CONSOLE_LINES) consoleLogs.splice(0, consoleLogs.length - MAX_CONSOLE_LINES);
+  // Web logs must never steal focus from what the user is doing; they simply
+  // accumulate in the Console tab.
+  if (!els.outConsole || currentRunnerMode !== "console") return;
   if (outCollapsed) ensureOutExpanded();
-  const line = document.createElement("div");
-  line.className = `ws-console-line ${level}`;
-  line.textContent = `[${level}] ${text}`;
-  els.outConsole.appendChild(line);
+  els.outConsole.appendChild(consoleLine(entry));
   try { els.outConsole.scrollTop = els.outConsole.scrollHeight; } catch {}
 }
 
@@ -1290,24 +1187,32 @@ async function runActive() {
   }
   const runner = runnerForPath(activePath);
   if (runner === "python") {
-    switchOut("console", "python");
+    switchOut("console");
     await runPythonFile(activePath);
   } else if (runner === "web") {
-    switchOut("preview", "web");
-    runPreview();
+    runPreview(activePath);
   } else {
-    pushConsole("info", `No runner for ${activePath} — open a .py or web file.`, "python");
+    pushConsole("info", `No runner for ${activePath} — open a .py or .html file.`, "python");
   }
 }
 
 
 async function runPythonFile(path) {
   ensureOutExpanded();
-  switchOut("console", "python");
+  switchOut("console");
   const code = project.getContent(path) ?? "";
   els.outConsole.replaceChildren();
-  pythonLogs = [];
+  consoleLogs = [];
   pushConsole("info", `▶ python ${path}`, "python");
+
+  // Pyodide executes on the browser main thread, so an endless loop blocks
+  // rendering *and* the Stop button — the tab can only be recovered by closing
+  // it. Warn before that happens rather than after.
+  if (/^\s*while\s+True\s*:/m.test(code) && !/\bbreak\b/.test(code)) {
+    pushConsole("warn", "This script has an unbounded `while True:` loop with no `break`. Python runs on the main thread, so an endless run will freeze this tab and need a reload — use a counter or `break` to bound it.", "python");
+    showAppToast("Warning: unbounded `while True:` loop — an endless run will freeze the tab", "error");
+  }
+  try { localStorage.setItem(RUN_PENDING_KEY, String(Date.now())); } catch {}
 
   if (els.stopPyBtn) els.stopPyBtn.hidden = false;
   if (els.runBtn) els.runBtn.hidden = true;
@@ -1316,6 +1221,14 @@ async function runPythonFile(path) {
     if (!isPyodideLoaded()) {
       pushConsole("info", "Booting Python runtime...", "python");
       await loadPyodideRuntime({ onStatus: s => pushConsole("info", s, "python") });
+    }
+    // Packages vendored under vendor/python-packages install from disk, so a
+    // script that imports e.g. rich/networkx runs even with no network.
+    try {
+      const bundled = await ensureBundledImports(code, { onStatus: s => pushConsole("info", s, "python") });
+      if (bundled.length) pushConsole("info", `Offline bundle: ${bundled.join(", ")}`, "python");
+    } catch (err) {
+      console.warn("[code] offline bundle check failed", err);
     }
     await syncFilesToPyFS(project);
     const res = await runPython(code, {
@@ -1340,30 +1253,30 @@ async function runPythonFile(path) {
   } finally {
     if (els.stopPyBtn) els.stopPyBtn.hidden = true;
     if (els.runBtn) els.runBtn.hidden = false;
+    // The run returned, so the tab is healthy again.
+    try { localStorage.removeItem(RUN_PENDING_KEY); } catch {}
   }
 }
 
+// Render one HTML file in the sandboxed preview. The entry is always explicit:
+// the given path, or the active file when it is HTML. There is no fallback to a
+// guessed "index.html" — a non-HTML active file simply has nothing to preview.
 function runPreview(entry = null) {
   ensureOutExpanded();
   try {
-    let htmlFile = entry && /\.html?$/i.test(entry)
-      ? entry
-      : activePath && /\.html?$/i.test(activePath) ? activePath : "index.html";
-    if (!project.has(htmlFile)) {
-      const anyHtml = project.listPaths().find(p => /\.html?$/i.test(p));
-      if (anyHtml) htmlFile = anyHtml;
-    }
-    const map = {};
-    for (const [k, v] of project.files) map[k] = v.content;
-    if (!htmlFile || !project.has(htmlFile)) {
-      const message = "No HTML file found to preview — create index.html";
+    const requested = entry ?? (runnerForPath(activePath) === "web" ? activePath : null);
+    const htmlFile = requested && project.has(requested) ? requested : null;
+    if (!htmlFile) {
+      const message = activePath
+        ? `Nothing to preview — ${activePath} is not an HTML file`
+        : "Nothing to preview — open an HTML file first";
       pushConsole("warn", message, "web");
       return { ok: false, error: message };
     }
-    webLogs = [];
-    const ready = runner.run(map, { entry: htmlFile });
-    pushConsole("info", `Preview: ${htmlFile}`, "web");
-    switchOut("preview", "web");
+    previewEntry = htmlFile;
+    const ready = runner.run(project, { entry: htmlFile });
+    pushConsole("info", `▶ preview ${htmlFile}`, "web");
+    switchOut("preview");
     return { ok: true, entry: htmlFile, ready };
   } catch (e) {
     const message = String(e?.message ?? e);
@@ -1377,19 +1290,31 @@ async function openPackageManagerModal() {
   const modal = document.createElement("div");
   modal.className = "ws-modal-backdrop";
   modal.innerHTML = `
-    <div class="ws-modal" style="max-width:460px">
+    <div class="ws-modal" style="max-width:560px">
       <h3>Python Packages</h3>
-      <p style="font-size:13px; color:var(--t3); margin:0 0 12px">Install pure-Python packages from PyPI or bundled scientific packages (pandas, numpy, matplotlib, sympy, rich, etc.)</p>
+      <p style="font-size:13px; color:var(--t3); margin:0 0 12px">Bundled packages install from disk and work with no network connection. Anything else is fetched from PyPI (or loaded from the Pyodide distribution when available).</p>
       <div style="display:flex; gap:6px; margin-bottom:12px">
-        <input type="text" class="ws-pkg-input mono" placeholder="Package name, e.g. pandas or sympy" style="flex:1; padding:7px 10px; border-radius:6px; background:var(--panel-hover); border:1px solid var(--line); color:var(--t1)" />
+        <input type="text" class="ws-pkg-input mono" placeholder="Package name, e.g. requests or sympy" style="flex:1; padding:7px 10px; border-radius:6px; background:var(--panel-hover); border:1px solid var(--line); color:var(--t1)" />
         <button class="ws-btn primary small ws-pkg-install">Install</button>
       </div>
       <div class="ws-pkg-status mono" style="font-size:12px; margin-bottom:10px; min-height:1.2em; color:var(--ok)"></div>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px">
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:0 0 6px; gap:8px">
+        <span style="font-size:11.5px; color:var(--t4)">Bundled for offline use <span class="ws-pkg-count mono"></span></span>
+        <span style="display:flex; align-items:center; gap:8px">
+          <button class="ws-btn ghost tiny ws-pkg-prepare" title="Load the Pyodide scientific stack (numpy, pandas, matplotlib, scipy, scikit-learn, sympy) so data-science packages work offline afterwards">⬇ Cache scientific stack</button>
+          <span class="mono ws-pkg-offline" style="font-size:10.5px; color:var(--t4)"></span>
+        </span>
+      </div>
+      <div class="ws-pkg-bundled" style="font-size:12px; max-height:220px; overflow-y:auto; border:1px solid var(--line-soft); border-radius:6px; background:rgba(0,0,0,0.18)">
+        <div class="ws-pkg-empty mono" style="padding:10px; font-size:11px; color:var(--t3)">Loading offline bundle…</div>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:12px 0 6px">
         <span style="font-size:11.5px; color:var(--t4)">Loaded packages:</span>
         <button class="ws-btn ghost tiny ws-pkg-refresh" title="Refresh loaded package list" style="padding:2px 6px">↻ Refresh</button>
       </div>
-      <div class="ws-pkg-list mono" style="font-size:11px; max-height:110px; overflow-y:auto; color:var(--t3); background:rgba(0,0,0,0.2); padding:6px; border-radius:4px">
+      <div class="ws-pkg-list mono" style="font-size:11px; max-height:80px; overflow-y:auto; color:var(--t3); background:rgba(0,0,0,0.2); padding:6px; border-radius:4px">
       </div>
       <div class="ws-modal-actions" style="margin-top:14px; justify-content:flex-end">
         <button class="ws-btn ghost small ws-pkg-close">Close</button>
@@ -1403,6 +1328,10 @@ async function openPackageManagerModal() {
   const listEl = modal.querySelector(".ws-pkg-list");
   const refreshBtn = modal.querySelector(".ws-pkg-refresh");
   const closeBtn = modal.querySelector(".ws-pkg-close");
+  const bundledEl = modal.querySelector(".ws-pkg-bundled");
+  const bundledCountEl = modal.querySelector(".ws-pkg-count");
+  const offlineEl = modal.querySelector(".ws-pkg-offline");
+  const prepareBtn = modal.querySelector(".ws-pkg-prepare");
   input.focus();
 
   const refreshLoadedPackages = () => {
@@ -1417,34 +1346,143 @@ async function openPackageManagerModal() {
   refreshLoadedPackages();
   refreshBtn.addEventListener("click", refreshLoadedPackages);
 
-  const doInstall = async () => {
-    const pkg = input.value.trim();
-    if (!pkg) return;
-    installBtn.disabled = true;
-    installBtn.textContent = "Installing…";
-    statusEl.textContent = `Installing ${pkg}…`;
-    statusEl.style.color = "var(--t3)";
+  const setBusy = (busy, label) => {
+    installBtn.disabled = busy;
+    installBtn.textContent = busy ? "Installing…" : "Install";
+    if (label) { statusEl.textContent = label; statusEl.style.color = "var(--t3)"; }
+  };
+
+  const runInstall = async (pkg, { bundled } = {}) => {
+    setBusy(true, `Installing ${pkg}…`);
     try {
-      const res = await installPackage(pkg, { onStatus: s => { statusEl.textContent = s; } });
+      const res = bundled
+        ? await installBundledPackage(pkg, { onStatus: s => { statusEl.textContent = s; } })
+        : await installPackagePreferred(pkg, { onStatus: s => { statusEl.textContent = s; } });
       if (res.ok) {
-        statusEl.textContent = `✔ ${pkg} installed successfully!`;
+        statusEl.textContent = bundled
+          ? `✔ ${pkg} installed from the offline bundle`
+          : `✔ ${pkg} installed successfully`;
         statusEl.style.color = "var(--ok)";
-        input.value = "";
-        pushConsole("info", `✔ Package ${pkg} installed`, "python");
+        if (res.missingDeps?.length) {
+          statusEl.textContent += ` — warning: could not load ${res.missingDeps.join(", ")}`;
+          statusEl.style.color = "var(--warn)";
+        }
+        pushConsole("info", `✔ Package ${pkg} installed${bundled ? " (offline bundle)" : ""}`, "python");
+        if (res.loadedDeps?.length) {
+          pushConsole("info", `Pyodide stack: ${res.loadedDeps.join(", ")}`, "python");
+        }
         refreshLoadedPackages();
+        renderBundled();
       } else {
         statusEl.textContent = `✖ ${res.error || "Installation failed"}`;
         statusEl.style.color = "var(--danger)";
       }
+      return res;
+    } catch (e) {
+      statusEl.textContent = `✖ ${String(e?.message || e)}`;
+      statusEl.style.color = "var(--danger)";
+      return { ok: false, error: String(e) };
+    } finally {
+      installBtn.disabled = false;
+      installBtn.textContent = "Install";
+    }
+  };
+
+  const doInstall = async () => {
+    const pkg = input.value.trim();
+    if (!pkg) return;
+    const res = await runInstall(pkg);
+    if (res?.ok) input.value = "";
+  };
+
+  // ---- Bundled (offline) package list ----
+  let loaded = new Set();
+  const renderBundled = async () => {
+    const { packages, unavailable, generatedAt } = await bundledPackages();
+    loaded = new Set(installedPackages().map(n => String(n).toLowerCase().replace(/[-_.]+/g, "-")));
+    bundledEl.replaceChildren();
+    if (!packages.length) {
+      const empty = document.createElement("div");
+      empty.className = "ws-pkg-empty mono";
+      empty.style.cssText = "padding:10px; font-size:11px; color:var(--t3)";
+      empty.textContent = "No offline bundle found — run `node tools/vendor-python-packages.mjs`.";
+      bundledEl.appendChild(empty);
+      bundledCountEl.textContent = "";
+      offlineEl.textContent = "";
+      return;
+    }
+    const total = packages.reduce((n, p) => n + (p.size || 0), 0);
+    bundledCountEl.textContent = `(${packages.length})`;
+    offlineEl.textContent = `~${(total / 1048576).toFixed(1)} MB on disk${generatedAt ? ` · ${generatedAt.slice(0, 10)}` : ""}`;
+
+    for (const p of packages) {
+      const key = String(p.key || p.name).toLowerCase().replace(/[-_.]+/g, "-");
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid var(--line-soft)";
+      const left = document.createElement("div");
+      left.style.cssText = "flex:1; min-width:0";
+      const title = document.createElement("div");
+      title.className = "mono";
+      title.style.cssText = "font-size:12px; color:var(--t1)";
+      title.textContent = `${p.name} ${p.version}`;
+      const desc = document.createElement("div");
+      desc.style.cssText = "font-size:11px; color:var(--t3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap";
+      const ext = p.externalRequires ?? [];
+      desc.textContent = (p.description || "") + (ext.length ? ` · needs Pyodide stack: ${ext.join(", ")}` : "");
+      desc.title = (p.description || "") + (ext.length ? `\nRequires from the Pyodide distribution: ${ext.join(", ")}` : "\nFully self-contained in the offline bundle");
+      left.append(title, desc);
+      const btn = document.createElement("button");
+      btn.className = "ws-btn ghost tiny";
+      const isLoaded = loaded.has(key);
+      btn.textContent = isLoaded ? "✔ loaded" : "Install";
+      btn.disabled = isLoaded;
+      btn.title = `Install ${p.name} offline from vendor/python-packages`;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        const res = await runInstall(p.name, { bundled: true });
+        if (!res?.ok) btn.disabled = false;
+      });
+      row.append(left, btn);
+      bundledEl.appendChild(row);
+    }
+
+    const missing = Object.entries(unavailable ?? {});
+    if (missing.length) {
+      const note = document.createElement("div");
+      note.className = "mono";
+      note.style.cssText = "padding:8px 10px; font-size:10.5px; color:var(--t4); line-height:1.5";
+      note.textContent = `Not bundled (no pure-Python wheel): ${missing.map(([n]) => n).join(", ")} — these still install from PyPI when online.`;
+      bundledEl.appendChild(note);
+    }
+  };
+
+  renderBundled();
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    statusEl.textContent = "You are offline — bundled packages install from disk.";
+    statusEl.style.color = "var(--warn)";
+  }
+
+  // Pre-load the scientific stack so it lands in the service-worker cache and
+  // data-science packages keep working offline on later visits.
+  prepareBtn?.addEventListener("click", async () => {
+    prepareBtn.disabled = true;
+    prepareBtn.textContent = "Caching…";
+    try {
+      const res = await prepareOfflineStack({ onStatus: s => { statusEl.textContent = s; statusEl.style.color = "var(--t3)"; } });
+      const okMsg = `✔ Cached ${res.loaded.length} package${res.loaded.length === 1 ? "" : "s"} for offline use`;
+      statusEl.textContent = res.failed.length ? `${okMsg} — unavailable: ${res.failed.join(", ")}` : okMsg;
+      statusEl.style.color = res.failed.length ? "var(--warn)" : "var(--ok)";
+      pushConsole("info", `✔ Offline stack ready: ${res.loaded.join(", ") || "(none)"}`, "python");
+      refreshLoadedPackages();
+      renderBundled();
     } catch (e) {
       statusEl.textContent = `✖ ${String(e?.message || e)}`;
       statusEl.style.color = "var(--danger)";
     } finally {
-      installBtn.disabled = false;
-      installBtn.textContent = "Install";
-      refreshLoadedPackages();
+      prepareBtn.disabled = false;
+      prepareBtn.textContent = "⬇ Cache scientific stack";
     }
-  };
+  });
 
   installBtn.addEventListener("click", doInstall);
   input.addEventListener("keydown", e => { if (e.key === "Enter") doInstall(); });
@@ -1455,49 +1493,18 @@ async function openPackageManagerModal() {
 
 
 
-// ---- Agent thread helpers ----
+// ---- Chat thread helpers (file-aware, read-only) ----
 
-let userScrolledUp = false;
-
-function autoScrollAgent(force = false) {
-  const el = els.agentScroll;
-  if (!el) return;
-  if (force) {
-    userScrolledUp = false;
-    el.scrollTop = el.scrollHeight;
-    return;
-  }
-  if (!userScrolledUp) {
-    el.scrollTop = el.scrollHeight;
-  }
-}
-
-
-function renderTaskList(tasks) {
-  if (!els.taskList || !tasks || tasks.length === 0) return;
-  els.taskList.hidden = false;
-  const doneCount = tasks.filter(t => t.done).length;
-  els.taskList.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; font-weight:600; color:var(--t2);">
-      <span>📋 Plan (${doneCount}/${tasks.length})</span>
-      <button class="ws-btn ghost tiny" style="padding:1px 5px; font-size:10px;" onclick="this.closest('.ws-task-list').hidden=true">×</button>
-    </div>
-    <div style="display:flex; flex-direction:column; gap:3px;">
-      ${tasks.map(t => `<div style="display:flex; gap:6px; align-items:baseline; color:${t.done ? 'var(--ok)' : t.inProgress ? 'var(--accent)' : 'var(--t3)'}"><span>${t.done ? '✔' : t.inProgress ? '⏳' : '○'}</span><span style="${t.done ? 'text-decoration:line-through; opacity:0.8;' : ''}">${escapeHtml(t.title)}</span></div>`).join("")}
-    </div>
-  `;
-}
-
-function clearAgentThread() {
-  els.agentThread.replaceChildren();
-  if (els.taskList) {
-    els.taskList.hidden = true;
-    els.taskList.replaceChildren();
-  }
+function clearChatThread() {
+  chatHistory = [];
+  if (!els.chatThread) return;
+  els.chatThread.replaceChildren();
   const e = document.createElement("div");
   e.className = "ws-empty";
-  e.innerHTML = `Ask the agent to build, refactor, or fix. Understand that you're working with a small model that has limited world knowledge and reasoning skills.<br><br>Tools: <span class="mono">read_file · apply_patch · write_file · search · run</span>. <br>Right-click a file → <b>Explain/Fix/Add</b> or type <span class="mono">@</span>.`;
-  els.agentThread.appendChild(e);
+  e.innerHTML = `Ask about your project files.<br><br>
+  Tip: Right-click a file → <b>Explain / Review / Add to Chat</b>, type <span class="mono">@</span> to mention files, or select code → <b>Add selection</b>.<br><br>
+  <span class="mono" style="font-size:11px; color:var(--t4)">Chat is read-only — it never edits files. Copy a suggested snippet and paste it into the editor yourself.</span>`;
+  els.chatThread.appendChild(e);
 }
 
 function appendImageToBubble(bubble, image) {
@@ -1509,250 +1516,119 @@ function appendImageToBubble(bubble, image) {
   bubble.appendChild(img);
 }
 
-function appendAgent(role, markdown, image = null) {
-  els.agentThread.querySelector(".ws-empty")?.remove();
-  const msg = document.createElement("div");
-  msg.className = `msg ${role}`;
-  const label = document.createElement("div");
-  label.className = "role";
-  label.textContent = role === "user" ? "You" : "Agent";
-  const bubble = document.createElement("div");
-  bubble.className = `bubble ${role}`;
-  appendImageToBubble(bubble, image);
-  if (markdown) {
-    const text = document.createElement("div");
-    text.innerHTML = role === "assistant" ? renderMarkdown(markdown) : escapeHtml(markdown);
-    bubble.appendChild(text);
-  }
-  msg.append(label, bubble);
-  els.agentThread.appendChild(msg);
-  autoScrollAgent(role === "user");
-  return bubble;
-}
-
-function appendInstructionCard(text, note, step) {
-  els.agentThread.querySelector(".ws-empty")?.remove();
-  const msg = document.createElement("div");
-  msg.className = "msg environment";
-  const label = document.createElement("div");
-  label.className = "role";
-  label.textContent = "Environment 🌐";
-  const bubble = document.createElement("div");
-  bubble.className = "bubble environment";
-  bubble.innerHTML = `
-    <details class="ws-instruction-details" open>
-      <summary class="mono">⚙️ <b>Feedback / Instruction to Agent</b>${note ? ` <span style="color:var(--t4); font-size:10.5px">(${escapeHtml(note)})</span>` : ""}</summary>
-      <div class="ws-instruction-body mono">${escapeHtml(text)}</div>
-    </details>
-  `;
-  msg.append(label, bubble);
-  els.agentThread.appendChild(msg);
-  autoScrollAgent(false);
-}
-
-function appendPromptCard(messages, phase, step) {
-  const promptText = (messages || []).map(message => {
-    const role = String(message?.role || "message").toUpperCase();
-    return `[${role}]\n${String(message?.content || "")}`;
-  }).join("\n\n");
-  const phaseLabel = ({ planning: "Planning", action: "Action", reflection: "Reflection" }[phase]) || phase;
-  appendInstructionCard(promptText, `Prompt sent · ${phaseLabel} · Step ${step}`, step);
-}
-
-function appendToolCard(call, result) {
-  const card = document.createElement("div");
-  card.className = "ws-tool-card " + (result?.ok ? "ok" : "err");
-
-  const pathLabel = call.args?.path || call.args?.filename || "";
-  const head = document.createElement("div");
-  head.className = "ws-tool-head mono";
-  head.innerHTML = `<span>🔧 <b>${escapeHtml(call.name)}</b>${pathLabel ? ` <span style="color:var(--t1)">(${escapeHtml(pathLabel)})</span>` : ""}</span><span style="color:${result?.ok ? "var(--ok)" : "var(--danger)"}; font-weight:600">${result?.ok ? "✓ Success" : "✗ Error"}</span>`;
-
-  card.appendChild(head);
-
-  // If content or patch exists, show a collapsible preview
-  const payloadTools = new Set(["write_file", "append_file", "apply_patch"]);
-  const payload = payloadTools.has(call.name)
-    ? (call.args?.content ?? call.args?.patch ?? call.args?.code)
-    : null;
-  if (payload != null && String(payload).length > 0) {
-    const diff = document.createElement("details");
-    diff.className = "ws-tool-diff";
-    diff.innerHTML = `<summary class="mono">View payload (${String(payload).length} chars)</summary><pre class="mono"><code>${escapeHtml(String(payload))}</code></pre>`;
-    card.appendChild(diff);
-  } else {
-    const displayArgs = Object.fromEntries(
-      Object.entries(call.args || {}).filter(([key]) => !["path", "filename"].includes(key))
-    );
-    if (Object.keys(displayArgs).length > 0) {
-      const argsPre = document.createElement("pre");
-      argsPre.className = "ws-tool-args mono";
-      argsPre.textContent = JSON.stringify(displayArgs, null, 2);
-      card.appendChild(argsPre);
-    }
-  }
-
-  if (result) {
-    const output = String(result.output || (result.ok ? "Done" : "Failed"));
-    const out = document.createElement(/```/.test(output) ? "div" : "pre");
-    out.className = "ws-tool-out mono";
-    if (out.tagName === "DIV") out.innerHTML = renderMarkdown(output);
-    else out.textContent = output;
-    card.appendChild(out);
-  }
-
-  els.agentThread.querySelector(".ws-empty")?.remove();
-  const wrap = document.createElement("div");
-  wrap.className = "msg assistant";
-  const bubble = document.createElement("div");
-  bubble.className = "bubble assistant";
-  bubble.appendChild(card);
-  wrap.appendChild(bubble);
-  els.agentThread.appendChild(wrap);
-  autoScrollAgent(false);
-  return card;
-}
-
-
-
-// ---- Permission UI ----
-
-let _permResolver = null;
-let _humanPending = null;
-
-function showPermissionCard(call){
-  // compute diff if patch/write
-  let diffText = "";
-  try {
-    if (call.name==="apply_patch"){
-      const cur = project.getContent(call.args.path) ?? "";
-      diffText = call.args.patch || "";
-    } else if (call.name==="write_file"){
-      const cur = project.getContent(call.args.path);
-      const next = String(call.args.content ?? "");
-      if (cur != null) {
-        const d = computeDiffPreview(cur, next);
-        diffText = d.preview;
-      } else {
-        diffText = `New file ${call.args.path} (${next.length} chars)\n${next}`;
+// Add a Copy button to every rendered code block so suggested snippets are
+// easy to apply manually. Delegated on the thread: one listener, works for
+// streamed updates too.
+function decorateChatThreadCopy() {
+  if (!els.chatThread || els.chatThread._copyWired) return;
+  els.chatThread._copyWired = true;
+  els.chatThread.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-copy-code]");
+    if (!btn || !els.chatThread.contains(btn)) return;
+    const pre = btn.closest("pre");
+    const code = pre?.querySelector("code")?.innerText ?? pre?.innerText ?? "";
+    if (!code) { showAppToast("Nothing to copy", "error"); return; }
+    try {
+      await navigator.clipboard.writeText(code);
+      showAppToast("Copied snippet — paste it into the editor", "success");
+    } catch {
+      // Clipboard API unavailable (permissions / insecure context): select instead.
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(pre.querySelector("code") || pre);
+        const sel = getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        showAppToast("Snippet selected — press Ctrl+C to copy", "info");
+      } catch {
+        showAppToast("Copy failed — select the code manually", "error");
       }
     }
-  } catch {}
-  els.permTitle.textContent = `Allow ${call.name}?`;
-  els.permBody.textContent = `${call.name}(${JSON.stringify(call.args)})`;
-  if (diffText){
-    els.permDiff.textContent = diffText;
-    els.permDiff.hidden=false;
-
-  } else els.permDiff.hidden=true;
-  els.permissionCard.hidden=false;
-  els.permissionCard.scrollIntoView({block:"nearest"});
-  return new Promise(resolve=>{
-    _permResolver = resolve;
   });
-}
-
-function hidePermissionCard(decision){
-  els.permissionCard.hidden=true;
-  if (_permResolver){ const r=_permResolver; _permResolver=null; r(decision); }
-}
-
-function openHumanResponseCard(question, type = "human_prompt") {
-  cancelHumanResponse();
-  const normalizedQuestion = String(question || "");
-  els.humanTitle.textContent = type === "human_steering" ? "Human steering required" : "Agent needs guidance";
-  els.humanQuestion.textContent = normalizedQuestion || "The agent needs more information.";
-  els.humanInput.value = "";
-  els.humanCard.hidden = false;
-  els.humanCard.scrollIntoView({ block: "nearest" });
-  let resolvePending;
-  const promise = new Promise(resolve => {
-    resolvePending = resolve;
-  });
-  _humanPending = { question: normalizedQuestion, promise, resolve: resolvePending };
-  els.humanInput.focus();
-  return promise;
-}
-
-function resolveHumanResponse(value) {
-  const pending = _humanPending;
-  if (!pending) return;
-  const content = String(value || "").trim();
-  if (!content) return;
-  _humanPending = null;
-  els.humanCard.hidden = true;
-  pending.resolve({ content });
-}
-
-function cancelHumanResponse() {
-  const pending = _humanPending;
-  _humanPending = null;
-  if (els.humanCard) els.humanCard.hidden = true;
-  pending?.resolve(null);
-}
-
-// ---- Undo ----
-
-async function doUndo(){
-  if (undoStack.length===0) return;
-  const last = undoStack.pop();
-  try {
-    // restore before snapshot
-    if (last.before){
-      // clear then restore
-      project.files.clear();
-      for (const [k,v] of Object.entries(last.before)){
-        project.files.set(k, {content: String(v), mtime: Date.now()});
-      }
+  // Tag code blocks after each render pass.
+  const tagBlocks = () => {
+    for (const pre of els.chatThread.querySelectorAll("pre")) {
+      if (pre._copyTagged) continue;
+      pre._copyTagged = true;
+      pre.style.position = pre.style.position || "relative";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ws-btn ghost tiny";
+      btn.setAttribute("data-copy-code", "");
+      btn.textContent = "⧉ Copy";
+      btn.title = "Copy this snippet";
+      btn.style.cssText = "position:absolute;top:6px;right:6px;opacity:.75;background:rgba(0,0,0,.45);";
+      btn.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
+      btn.addEventListener("mouseleave", () => { btn.style.opacity = ".75"; });
+      pre.appendChild(btn);
     }
-    await saveProject(project);
-    explorer.refresh();
-    renderTabs();
-    if (activePath && !project.has(activePath)){
-      activePath = project.listPaths()[0] || null;
-      if (activePath) await openFile(activePath);
-      else if (editorCtrl) try{ editorCtrl.setValue("", "untitled.txt"); }catch{}
-    } else if (activePath && editorCtrl){
-      const disk = project.getContent(activePath) ?? "";
-      if (editorCtrl.getValue() !== disk){
-        editorSetting=true;
-        try{ editorCtrl.setValue(disk, activePath); } finally { setTimeout(()=>editorSetting=false,0); }
-      }
-    }
-    showAppToast(`Undid ${last.call?.name || "change"}`, "success");
-    appendAgent("assistant", `_Undid \`${last.call?.name}\` on \`${last.call?.args?.path || ""}\` — restored previous version._`);
-    updateUndoUI();
-  } catch(e){ showAppToast("Undo failed: "+String(e), "error"); }
+  };
+  new MutationObserver(tagBlocks).observe(els.chatThread, { childList: true, subtree: true });
+  tagBlocks();
 }
 
-// ---- Send to agent controller ----
+// Build the file-context block for the chat prompt. Head-truncates oversize
+// files with a visible notice so the small model stays reliable.
+function buildFileContextBlock() {
+  const parts = [];
+  for (const a of attachments) {
+    const full = String(a.text ?? "");
+    const truncated = full.length > MAX_ATTACH_CHARS;
+    const body = truncated ? full.slice(0, MAX_ATTACH_CHARS) : full;
+    parts.push(`--- File: ${a.path} (${full.length} chars${truncated ? `, truncated to ${MAX_ATTACH_CHARS}` : ""}) ---\n${body}${truncated ? `\n… [truncated — ${full.length - MAX_ATTACH_CHARS} more chars omitted]` : ""}`);
+  }
+  if (currentSelection?.text) {
+    const sel = String(currentSelection.text);
+    const truncated = sel.length > MAX_ATTACH_CHARS;
+    parts.push(`--- Current editor selection: ${currentSelection.path || activePath || "unknown"} (${sel.length} chars${truncated ? ", truncated" : ""}) ---\n${truncated ? sel.slice(0, MAX_ATTACH_CHARS) : sel}`);
+  }
+  return parts.join("\n\n");
+}
+
+// ---- File-aware chat (read-only) ----
 
 async function sendToChat() {
-  const text = els.chatInput.value.trim();
-  if ((!text && !pendingImage) || !modelService.ready || generating) return;
+  const rawText = els.chatInput.value.trim();
+  if ((!rawText && attachments.length === 0 && !pendingImage) || !modelService.ready || generating) return;
+  // Resolve @-mentions into attachments first.
+  resolveMentionsInText(rawText);
+  const fileBlock = buildFileContextBlock();
+  const question = rawText || "(no question — review the attached files and summarize what they do)";
 
   els.chatInput.value = "";
+  hideMentionPop();
   autoGrowChat();
+
+  // User-visible echo with attachment list.
+  const displayText = question
+    + (attachments.length ? `\n\n> Attached: ${attachments.map(a => `\`${a.path}\``).join(", ")}` : "")
+    + (currentSelection?.text ? `\n\n> Selection: \`${currentSelection.path || activePath || "editor"}\` (${String(currentSelection.text).length} chars)` : "");
   const image = pendingImage;
-  let userContent = text;
+  let userContent;
   if (image) {
+    const promptText = `${question}${fileBlock ? `\n\n${fileBlock}` : ""}`;
     userContent = [
       { type: "image", url: image.url },
-      { type: "text", text: text || "What is in this image? Describe it in detail." },
+      { type: "text", text: promptText },
     ];
     const userMessage = chatThreadView.appendUser("");
     const userBubble = userMessage.querySelector(".bubble");
     appendImageToBubble(userBubble, image);
-    if (text) {
-      const textNode = document.createElement("div");
-      textNode.textContent = text;
-      userBubble.appendChild(textNode);
-    }
+    const textNode = document.createElement("div");
+    textNode.textContent = displayText || "(attached image)";
+    userBubble.appendChild(textNode);
     clearPendingImage();
   } else {
-    chatThreadView.appendUser(text);
+    const promptText = fileBlock
+      ? `You are a read-only code assistant. Answer questions about the project files below. Never claim to edit files — instead give short explanations plus complete corrected code snippets the user can copy and paste manually.\n\n${fileBlock}\n\n=== QUESTION ===\n${question}`
+      : question;
+    userContent = promptText;
+    chatThreadView.appendUser(displayText);
   }
   chatHistory.push({ role: "user", content: userContent });
+  // Attachments persist across turns until cleared so follow-up questions
+  // ("now fix the loop") keep working without re-attaching.
+  renderAttachments();
   const assistant = chatThreadView.appendAssistant("");
   const bubble = assistant.querySelector(".bubble");
 
@@ -1806,361 +1682,3 @@ async function sendToChat() {
   }
 }
 
-async function sendToAgent() {
-  const rawText = els.agentInput.value.trim();
-  if ((!rawText && attachments.length===0 && !pendingImage) || !modelService.ready || generating) return;
-  // resolve @ mentions (also pushes attachments)
-  resolveMentionsInText(rawText);
-  // build task string plus attachments inline if any
-  let taskWithAttachments = rawText;
-  // if attachments exist, they will be passed as separate param to the controller; but also
-  // mention in text for visibility
-  const attachNote = attachments.length ? `\n\n[Attached files: ${attachments.map(a=>`@${a.path}`).join(", ")}]` : "";
-  if (attachNote) taskWithAttachments = (taskWithAttachments || "(no prompt — use attached context)") + attachNote;
-  const image = pendingImage;
-  if (image) taskWithAttachments = (taskWithAttachments || "(no prompt — inspect the attached image)") + `\n\n[Attached image: ${image.name || "pasted image"}]`;
-
-  els.agentInput.value = "";
-  hideMentionPop();
-  autoGrowAgent();
-  syncState();
-
-  const displayText = rawText + (attachments.length? `\n\n> Attached: ${attachments.map(a=>`\`${a.path}\``).join(", ")}` : "") + (image ? `\n\n> Attached image: \`${image.name || "pasted image"}\`` : "");
-  appendAgent("user", displayText || "(attached image)", image);
-
-  const userMsg = { role: "user", content: taskWithAttachments };
-  agentHistory.push(userMsg);
-  const thisAttachments = [...attachments, ...(image ? [{ type: "image", url: image.url, name: image.name }] : [])];
-  // keep attachments? Per request: attachments should stay until explicitly cleared or sent?
-  // We'll clear after send but keep pills until next send? Clear now like pendingSelection old:
-  // allow multi-turn with same attachments if user didn't clear? Let's clear for single-turn clarity:
-  attachments = [];
-  renderAttachments();
-  clearPendingImage();
-  // Keep the current selection as controller context for this turn.
-  const thisSelection = currentSelection;
-
-  generating = true;
-  abortController = new AbortController();
-  els.agentStatus.textContent = "Agent thinking…";
-  syncState();
-
-  // streaming bubble for thinking
-  let streamingBubble = null;
-  let streamingDetails = null;
-
-  const unlock = acquireLock("code");
-  if (!unlock) {
-    appendAgent("assistant", "_Another app is generating — try again shortly._");
-    generating = false; syncState(); abortController = null; return;
-  }
-
-  // Snapshot the project before the controller starts (for undo support).
-  const preRunSnap = {};
-  for (const [k,v] of project.files) preRunSnap[k]=v.content;
-
-  const executors = {
-    writeFile: async (path, content) => {
-      const p = normalizePathExport(path);
-      project.set(p, content);
-      await saveProject(project);
-      explorer.refresh();
-      renderTabs();
-      if (p === activePath && editorCtrl) {
-        const cur = editorCtrl.getValue();
-        if (cur !== content) { editorSetting=true; try{ editorCtrl.setValue(content, p);} finally{ setTimeout(()=>editorSetting=false,0);} }
-      }
-      return { ok: true };
-    },
-    deleteFile: async (path) => {
-      const p = normalizePathExport(path);
-      if (!project.has(p)) throw new Error("Not found");
-      project.delete(p);
-      await saveProject(project);
-      explorer.refresh();
-      openTabs = openTabs.filter(x => x !== p);
-      if (activePath === p) activePath = openTabs[0] || project.listPaths()[0] || null;
-      renderTabs();
-      if (activePath) await openFile(activePath);
-      return { ok: true };
-    },
-    mkdir: async (path) => {
-      const p = normalizePathExport(path);
-      project.set(`${p}/.gitkeep`, "");
-      await saveProject(project);
-      explorer.refresh();
-      return { ok: true };
-    },
-    search: async (query, k = 8) => {
-      const idx = new BM25Index();
-      const files = project.listFiles();
-      for (const f of files) {
-        const chunks = chunkText(f.content, { size: 800, overlap: 100 });
-        chunks.forEach((c, i) => idx.add(c, { docName: f.path, chunk: i + 1, of: chunks.length }));
-      }
-      const hits = idx.search(query, k);
-      if (hits.length === 0) return "(no matches)";
-      return hits.map(h => `File: ${h.meta.docName} · chunk ${h.meta.chunk}/${h.meta.of} (score ${h.score.toFixed(2)})\n${h.text.slice(0, 900)}`).join("\n\n---\n\n");
-    },
-    runPython: async (arg, opts) => {
-      let code = "";
-      let path = "";
-      if (opts?.code) { code = opts.code; path = opts.path || ""; }
-      else if (typeof arg === "string" && project.has(arg)) { path = arg; code = project.getContent(arg) ?? ""; }
-      else if (typeof arg === "string" && arg.includes("\n")) { code = arg; }
-      else if (typeof arg === "string") { path = arg; code = project.getContent(arg) ?? arg; }
-
-      if (!isPyodideLoaded()) {
-        await loadPyodideRuntime({ onStatus: s => { els.agentStatus.textContent = s; } });
-      }
-      await syncFilesToPyFS(project);
-      pythonLogs = [];
-      const res = await runPython(code, {
-        path: path || opts?.path || "",
-        nonInteractive: Boolean(opts?.nonInteractive),
-      });
-      els.outConsole.replaceChildren();
-      if (res.stdout) pushConsole("log", res.stdout, "python");
-      if (res.stderr) pushConsole("warn", res.stderr, "python");
-      if (res.error) pushConsole("error", res.error, "python");
-      for (const png of res.plots ?? []) {
-        const img = document.createElement("img"); img.className = "ws-plot"; img.src = png; els.outConsole.appendChild(img);
-      }
-      switchOut("console", "python");
-      return res;
-    },
-    runWeb: async (entry) => {
-      const e = entry || "index.html";
-      let htmlPath = e;
-      if (!project.has(htmlPath)) {
-        const anyHtml = project.listPaths().find(p => /\.html?$/i.test(p));
-        htmlPath = anyHtml || htmlPath;
-      }
-      const preview = runPreview(htmlPath);
-      if (!preview?.ok) return preview || { ok: false, error: "Preview failed" };
-      const previewResult = await preview.ready;
-      const errorLines = webLogs
-        .filter(entry => entry.level === "error" || /\[error\]|uncaught\s+\w*error/i.test(entry.text))
-        .map(entry => `[${entry.level}] ${entry.text}`);
-      const logs = webLogs.map(entry => `[${entry.level}] ${entry.text}`).join("\n").slice(0, 4000) || "(no console output yet)";
-      const probe = previewResult?.probe ?? null;
-      if (errorLines.length > 0) {
-        return { ok: false, error: errorLines.join("\n"), log: logs, probe };
-      }
-      return { ok: true, log: logs, probe };
-    },
-    installPackage: async (name) => {
-      if (!isPyodideLoaded()) await loadPyodideRuntime({ onStatus: s => els.agentStatus.textContent = s });
-      try {
-        await installPackage(name, { onStatus: s => pushConsole("info", s, "python") });
-        pushConsole("log", `✔ ${name} installed`, "python");
-        return { ok: true, output: `${name} installed` };
-      } catch (e) { pushConsole("error", String(e), "python"); return { ok: false, error: String(e) }; }
-    },
-    requestPermission: async (call) => {
-      // if auto-approve toggled, this won't be called (permissionFor returns auto)
-      // else show card
-      const decision = await showPermissionCard(call);
-      return decision; // allow, allow_always, deny
-    },
-    awaitHumanResponse: async (question, metadata) => {
-      if (_humanPending?.question === String(question || "")) return _humanPending.promise;
-      return openHumanResponseCard(question, metadata?.type);
-    },
-  };
-
-  let streamingThinkingEl = null;
-  const autonomous = els.agenticModeToggle?.checked ?? getAgenticMode();
-
-  try {
-    const result = await runAgent({
-      project,
-      task: taskWithAttachments,
-      selection: thisSelection,
-      attachments: thisAttachments,
-      history: agentHistory.slice(0, -1),
-      signal: abortController.signal,
-      maxSteps: 48,
-      autonomous,
-      executors,
-      onSnapshot: (snap) => {
-        // push to undoStack (history stack)
-        undoStack.push(snap);
-        if (undoStack.length > 30) undoStack.shift();
-        updateUndoUI();
-      },
-      onEvent: (evt) => {
-        if (evt.type === "step") {
-          els.agentStatus.textContent = `Step ${evt.step}/${evt.of} · cap ${(evt.contextLimit/1024).toFixed(0)}K · ${evt.ctxMeta?.mode || ""} · thinking…`;
-        } else if (evt.type === "prompt") {
-          appendPromptCard(evt.messages, evt.phase, evt.step);
-          const phaseLabel = ({ planning: "Planning", action: "Action", reflection: "Reflection" }[evt.phase]) || evt.phase;
-          els.agentStatus.textContent = `Step ${evt.step} · ${phaseLabel} prompt sent`;
-        } else if (evt.type === "human_prompt" || evt.type === "human_steering") {
-          if (autonomous) {
-            els.agentStatus.textContent = "Agent is deciding on its own…";
-          } else {
-            openHumanResponseCard(evt.question, evt.type);
-            els.agentStatus.textContent = evt.type === "human_steering" ? "Waiting for human steering…" : "Waiting for human guidance…";
-          }
-        } else if (evt.type === "human_response") {
-          appendAgent("user", `Guidance: ${evt.content}`);
-        } else if (evt.type === "tasks") {
-          renderTaskList(evt.tasks);
-        } else if (evt.type === "instruction") {
-          if (streamingThinkingEl) {
-            const carets = streamingThinkingEl.querySelectorAll(".caret");
-            carets.forEach(c => c.remove());
-            streamingThinkingEl = null;
-          }
-          appendInstructionCard(evt.text, evt.note, evt.step);
-        } else if (evt.type === "thinking_delta") {
-          if (!streamingThinkingEl && (evt.thinkingText || evt.answerText)) {
-            const msg = document.createElement("div");
-            msg.className = "msg assistant";
-            const label = document.createElement("div"); label.className="role"; label.textContent="Agent";
-            const b = document.createElement("div"); b.className="bubble assistant";
-            b.innerHTML = '<span class="thinking"><span></span><span></span><span></span></span>';
-            msg.append(label, b);
-            els.agentThread.querySelector(".ws-empty")?.remove();
-            els.agentThread.appendChild(msg);
-            autoScrollAgent(false);
-            streamingThinkingEl = b;
-          }
-          if (streamingThinkingEl) {
-            const thinking = cleanProse(String(evt.thinkingText || ""));
-            const rawAnswer = String(evt.answerText || "");
-            // Tool protocol markup is rendered separately as a tool card.
-            // Never show its raw payload as a second assistant section while it streams.
-            const answer = /^\s*<tool\b/i.test(rawAnswer) ? "" : cleanProse(rawAnswer);
-            let html = "";
-            if (thinking) html += `<details class="thinking-block" open><summary>Thinking</summary><div class="thinking-body">${renderMarkdown(thinking)}</div></details>`;
-            if (answer) html += renderMarkdown(answer);
-            if (!thinking && !answer) html = '<span class="thinking"><span></span><span></span><span></span></span>';
-            streamingThinkingEl.innerHTML = html + '<span class="caret"></span>';
-            autoScrollAgent(false);
-          }
-        } else if (evt.type === "tool_call") {
-          if (streamingThinkingEl) {
-            const carets = streamingThinkingEl.querySelectorAll(".caret");
-            carets.forEach(c => c.remove());
-            const thinkingBlock = streamingThinkingEl.querySelector(".thinking-block");
-            if (thinkingBlock) {
-              streamingThinkingEl.replaceChildren(thinkingBlock);
-            } else {
-              streamingThinkingEl.closest(".msg")?.remove();
-            }
-          }
-          streamingThinkingEl = null;
-          els.agentStatus.textContent = `Running ${evt.call.name}…`;
-        } else if (evt.type === "tool_result") {
-          if (streamingThinkingEl) {
-            const carets = streamingThinkingEl.querySelectorAll(".caret");
-            carets.forEach(c => c.remove());
-          }
-          streamingThinkingEl = null;
-          appendToolCard(evt.call, evt.result);
-        } else if (evt.type === "model_raw") {
-          if (evt.thinking && !streamingThinkingEl) {
-            const t = document.createElement("details");
-            t.className = "thinking-block";
-            t.open = true;
-            t.innerHTML = `<summary>Thinking</summary><div class="thinking-body">${renderMarkdown(cleanProse(evt.thinking))}</div>`;
-            const msg = document.createElement("div");
-            msg.className = "msg assistant";
-            const b = document.createElement("div"); b.className = "bubble assistant"; b.appendChild(t);
-            msg.appendChild(b); els.agentThread.appendChild(msg);
-          }
-          if (streamingThinkingEl) {
-            const carets = streamingThinkingEl.querySelectorAll(".caret");
-            carets.forEach(c => c.remove());
-          }
-          streamingThinkingEl = null;
-        } else if (evt.type === "answer") {
-          const cleanAns = cleanProse(evt.answer);
-          if (streamingThinkingEl) {
-            const carets = streamingThinkingEl.querySelectorAll(".caret");
-            carets.forEach(c => c.remove());
-            if (cleanAns) {
-              streamingThinkingEl.innerHTML = renderMarkdown(cleanAns);
-            } else if (streamingThinkingEl.textContent.trim().length < 10) {
-              streamingThinkingEl.closest(".msg")?.remove();
-            }
-            streamingThinkingEl = null;
-          } else if (cleanAns) {
-            appendAgent("assistant", cleanAns);
-          }
-        } else if (evt.type === "compact") {
-          appendAgent("assistant", `_Context compaction: ${evt.note}_`);
-        } else if (evt.type === "loop_break") {
-          appendAgent("assistant", `_Loop guard: ${evt.note}_`);
-        } else if (evt.type === "nudge") {
-          if (evt.text) appendInstructionCard(evt.text, evt.note, evt.step);
-        }
-        autoScrollAgent(false);
-      },
-
-
-
-    });
-
-    if (result.ok) {
-      els.agentStatus.textContent = "Done.";
-      agentHistory.push({ role: "assistant", content: result.answer || "(completed)" });
-    } else if (result.aborted || abortController?.signal?.aborted) {
-      els.agentStatus.textContent = "Stopped.";
-      if (streamingThinkingEl) {
-        const carets = streamingThinkingEl.querySelectorAll(".caret");
-        carets.forEach(c => c.remove());
-        if (streamingThinkingEl.textContent.trim().length < 10) {
-          streamingThinkingEl.closest(".msg")?.remove();
-        }
-        streamingThinkingEl = null;
-      }
-    } else {
-      els.agentStatus.textContent = result.error ? "Stopped." : "Finished (max steps).";
-      if (result.answer) {
-        appendAgent("assistant", result.answer);
-        agentHistory.push({ role: "assistant", content: result.answer });
-      } else if (!result.error) {
-        appendAgent("assistant", "_Reached max steps without final answer. Try a more specific prompt or increase steps._");
-      }
-    }
-    await saveProject(project);
-    explorer.refresh();
-    renderTabs();
-    if (activePath && project.has(activePath)) {
-      const disk = project.getContent(activePath) ?? "";
-      if (editorCtrl && editorCtrl.getValue() !== disk) {
-        els.agentStatus.textContent += " · File changed — reload if needed.";
-      }
-    }
-    updateUndoUI();
-  } catch (err) {
-    const isAborted = abortController?.signal?.aborted || err?.name === "AbortError" || String(err?.message || "").includes("aborted");
-    if (!isAborted) {
-      console.error(err);
-      appendAgent("assistant", `⚠ ${escapeHtml(String(err?.message ?? err))}`);
-      els.agentStatus.textContent = "Error.";
-    } else {
-      els.agentStatus.textContent = "Stopped.";
-      if (streamingThinkingEl) {
-        const carets = streamingThinkingEl.querySelectorAll(".caret");
-        carets.forEach(c => c.remove());
-        if (streamingThinkingEl.textContent.trim().length < 10) {
-          streamingThinkingEl.closest(".msg")?.remove();
-        }
-        streamingThinkingEl = null;
-      }
-    }
-  } finally {
-    unlock();
-    generating = false;
-    abortController = null;
-    hidePermissionCard("deny"); // close if open
-    cancelHumanResponse();
-    streamingThinkingEl = null;
-    syncState();
-  }
-
-}

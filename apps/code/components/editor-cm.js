@@ -4,6 +4,11 @@
 
 let cmPromise = null;
 
+// Bare specifiers resolved by the import map in index.html, which pins every
+// @codemirror/* package (including all transitive /npm/ variants) to ONE
+// exact +esm build. That guarantees a single @codemirror/state instance —
+// without it, extensions fail the instanceof check with "Unrecognized
+// extension value in extension set".
 async function loadCM() {
   if (cmPromise) return cmPromise;
   cmPromise = (async () => {
@@ -20,16 +25,16 @@ async function loadCM() {
         { css },
         { oneDark }
       ] = await Promise.all([
-        import("https://esm.sh/@codemirror/view@6.43.10"),
-        import("https://esm.sh/@codemirror/state@6.7.2"),
-        import("https://esm.sh/@codemirror/commands@6.11.0"),
-        import("https://esm.sh/@codemirror/language@6.12.4"),
-        import("https://esm.sh/@codemirror/autocomplete@6.20.3"),
-        import("https://esm.sh/@codemirror/lang-python@6.2.1"),
-        import("https://esm.sh/@codemirror/lang-javascript@6.2.5"),
-        import("https://esm.sh/@codemirror/lang-html@6.4.12"),
-        import("https://esm.sh/@codemirror/lang-css@6.3.1"),
-        import("https://esm.sh/@codemirror/theme-one-dark@6.1.3"),
+        import("@codemirror/view"),
+        import("@codemirror/state"),
+        import("@codemirror/commands"),
+        import("@codemirror/language"),
+        import("@codemirror/autocomplete"),
+        import("@codemirror/lang-python"),
+        import("@codemirror/lang-javascript"),
+        import("@codemirror/lang-html"),
+        import("@codemirror/lang-css"),
+        import("@codemirror/theme-one-dark"),
       ]);
       return { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine, EditorState, Compartment, defaultKeymap, history, historyKeymap, indentOnInput, syntaxHighlighting, bracketMatching, foldGutter, foldKeymap, autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap, python, javascript, html, css, oneDark };
     } catch (e) {
@@ -47,9 +52,9 @@ function langForPath(path, mods) {
   if (lower.endsWith(".json")) return mods.javascript();
   if (lower.endsWith(".html") || lower.endsWith(".htm")) return mods.html();
   if (lower.endsWith(".css")) return mods.css();
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return mods.html(); // fallback
   if (lower.endsWith(".xml") || lower.endsWith(".svg")) return mods.html();
-  // default python-ish for unknown text?
+  // Anything else (Markdown, plain text, …) opens without a parser: attaching a
+  // language that doesn't match the file is worse than no highlighting at all.
   return [];
 }
 

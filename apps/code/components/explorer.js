@@ -210,7 +210,7 @@ function showContextMenu(x, y, items) {
   }, 0);
 }
 
-export function createExplorer({ container, project, onOpenFile, onFilesChanged, onReset, onAskAgent, onAttachFile }) {
+export function createExplorer({ container, project, onOpenFile, onFilesChanged, onReset, onAskChat, onAttachFile }) {
   let selectedPath = null;
   let expanded = new Set([""]); // root always expanded; store dir paths
   let draggedPath = null;
@@ -473,18 +473,18 @@ export function createExplorer({ container, project, onOpenFile, onFilesChanged,
   function openContextMenu(node, x, y) {
     const isDir = node.type === "dir";
     const items = [];
-    // Agentic actions (top, like Opencode/Codex)
+    // Chat actions (top, like Opencode/Codex)
     if (!isDir) {
       items.push(
-        { label: "Explain this file", icon: "💡", action: () => onAskAgent?.(node.path, "explain") },
-        { label: "Fix this file", icon: "🛠", action: () => onAskAgent?.(node.path, "fix") },
-        { label: "Add to Agent (@)", icon: "＋", action: () => onAttachFile?.(node.path) },
+        { label: "Explain this file", icon: "💡", action: () => onAskChat?.(node.path, "explain") },
+        { label: "Review this file", icon: "🛠", action: () => onAskChat?.(node.path, "fix") },
+        { label: "Add to Chat (@)", icon: "＋", action: () => onAttachFile?.(node.path) },
         { sep: true },
       );
     } else {
       items.push(
-        { label: "Ask Agent about folder", icon: "💬", action: () => onAskAgent?.(node.path, "explain_folder") },
-        { label: "Add folder to Agent", icon: "＋", action: () => onAttachFile?.(node.path) },
+        { label: "Ask Chat about folder", icon: "💬", action: () => onAskChat?.(node.path, "explain_folder") },
+        { label: "Add folder to Chat", icon: "＋", action: () => onAttachFile?.(node.path) },
         { sep: true },
       );
     }

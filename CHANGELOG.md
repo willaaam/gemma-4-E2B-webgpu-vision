@@ -5,8 +5,80 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [3.0.0] — 2026-09-13
+
+Major version because the **agentic Code loop was removed** (a headline 2.0.0
+feature): the Code app no longer plans tasks, writes files, runs tools or asks
+for permissions. Everything else in this release is additive or a bug fix.
+
+### Added
+
+- **Offline Python package bundle** — `tools/vendor-python-packages.mjs`
+  downloads a curated set of popular *pure-Python* packages plus their
+  pure-Python dependency closures into `vendor/python-packages/` (49 wheels,
+  ~11 MB) with a `manifest.json`. **34 curated packages:**
+  - *General*: rich, tabulate, tqdm, python-dateutil, pytz, packaging, attrs,
+    more-itertools, toolz, beautifulsoup4, networkx, pyparsing, Pygments,
+    chardet, openpyxl, markdown, texttable, humanize, xmltodict, six.
+  - *Data science*: seaborn, mlxtend, imbalanced-learn, yellowbrick, pingouin,
+    faker, arrow, numpy-financial, prettytable, xlsxwriter, natsort, glom, petl,
+    tzdata.
+
+  The Code app's **Packages** dialog lists them with one-click install from
+  disk, running a Python file auto-installs any bundled package it imports, and
+  `sw.js` caches `.whl` files (vendored *and* PyPI) so packages keep working with
+  no network. Bundled packages that depend on Pyodide's binary builds
+  (numpy/pandas/matplotlib/scipy/scikit-learn/statsmodels) load those from the
+  Pyodide distribution automatically, and the dialog shows which ones each
+  package needs; a **Cache scientific stack** button pre-loads numpy, pandas,
+  matplotlib, scipy, scikit-learn and sympy into the service-worker cache for
+  later offline use. Packages with no pure wheel (e.g. PyYAML) are reported as
+  PyPI-only. New `npm run vendor:python`.
+- **Release/attribution tooling** — `tools/check-release.mjs` (`npm run
+  check:release`, also part of `npm test`) verifies the module graph resolves,
+  every bare specifier and `?external=` dependency is covered by the import map,
+  every vendored wheel exists with a license and import names, and nothing still
+  references the deleted `src/agent` / `src/harness` modules. The vendor script
+  also generates `vendor/python-packages/LICENSES.md`, a per-package license
+  index with a copyleft callout, and `THIRD_PARTY_NOTICES.md` now covers the
+  Python runtime, the vendored wheels, and the remaining CDN libraries
+  (CodeMirror/Lezer, KaTeX, Chart.js, pdf.js, mammoth, fflate).
+- **File-aware Code chat** — `@`-mention autocomplete, attachment pills
+  (up to 8, persisted across turns), editor-selection context, explorer
+  right-click *Explain / Review / Add to Chat*, image paste, and a **Copy**
+  button on every suggested code snippet for manual apply. Chat is
+  read-only and never edits project files.
+
 ### Fixed
 
+- **Code: clicking an HTML file did not switch the bottom pane to Preview** —
+  a syntax-highlighter exception during the editor update rejected `openFile()`
+  before it reached the pane switch, leaving the Console tab and the Python Run
+  button on screen. The editor update is now non-fatal, so the correct runner is
+  always selected.
+- **Code: preview `console.log()` output appeared in a strip below the iframe** —
+  web and Python logs now share one Console tab; the `ws-preview-console` strip
+  is gone.
+- **Code: the web runner silently fell back to `index.html`** — the preview now
+  renders exactly the active HTML file (or the page already on screen), and
+  reports "not an HTML file" instead of guessing. `.css`/`.js`/`.md` no longer
+  offer a "Refresh Preview" button they cannot honour.
+- **Code: hardcoded `style.css` / `script.js` inlining** — every relative
+  `<link href>` / `<script src>` is now resolved against the project file map
+  (exact path, path relative to the entry's folder, or a unique basename) and
+  inlined, so nested entry points and arbitrary file names work.
+- **CodeMirror "Unrecognized extension" / `Cannot read properties of undefined`
+  crash** — every `@codemirror/*` and `@lezer/*` package is now loaded from
+  esm.sh with `?external=` (replacing the brittle version-redirect list in the
+  import map), so `@codemirror/state` and `@lezer/common` exist as a single
+  shared instance. Markdown files no longer open with the HTML parser.
+- **Stale offline bundle after re-vendoring** — `sw.js` treated
+  `vendor/python-packages/manifest.json` as an immutable asset, so a cache-first
+  hit hid newly vendored packages. Only `.whl` files are cached now; the
+  manifest is revalidated (and still falls back to cache when offline). Cache
+  version bumped to `ws-v3`.
 - **Test server stall at ~91% on localhost** — `tools/serve.mjs` now throttles to
   ~1 Gbit/s global by default (token-bucket, `THROTTLE_MBPS` / `--throttle-mbps`,
   `--no-throttle` to disable). The unthrottled loopback burst of 4×128 MiB
@@ -16,6 +88,30 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   size probe) to not stream a body and added `close`/`error` cleanup for
   `createReadStream` pipes. Documented in `README.md` Option B and
   `tools/serve.mjs:1` header.
+
+### Known limitations
+
+- **A CPU-bound or endless Python script freezes the tab.** Pyodide executes on
+  the browser main thread, so `while True: ...` blocks rendering, events and the
+  `⏹ Stop` button itself; the only recovery is reloading the tab. `stopPython()`
+  sets the SharedArrayBuffer interrupt flag, but that is only observed at
+  interpreter check points — a blocked `time.sleep` or a tight loop may never
+  reach one, and the click cannot be dispatched while the thread is busy.
+  Mitigations added: an *unbounded `while True:` loop with no `break`* warning
+  before the run, and a run-in-progress marker (`ws-code-run-pending`) so the
+  next load explains that a previous run never finished instead of looking
+  broken. The documented `options.timeout` on `runPython` is still unimplemented.
+  The real fix is to move the runtime into a Web Worker (see below).
+
+### Removed
+
+- **Agentic Code loop** — deleted `src/agent/` (task-list controller +
+  protocol parsers), `src/harness/` (prompts, permissions, diff, tool
+  registry) and `testing/agent.test.js`. The Code app no longer plans,
+  writes files, runs tools, asks permissions, or keeps an undo stack.
+- **Agent/Chat tabs in Code** — the right pane is now a single *Chat with
+  files* view. Removed the Auto-approve and Agentic-mode toggles, task
+  list, permission cards, and human-steering cards.
 
 ### Changed
 

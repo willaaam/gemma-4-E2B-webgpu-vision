@@ -56,7 +56,7 @@ One model load powers four apps (hash-routed views in a single page):
 |---|---|
 | **Chat** | Streaming chat + vision, with conversation history (IndexedDB), export to `.md`, and the kernels viewer. Context cap follows the global top-bar selector. |
 | **Research** | Upload PDF / DOCX / TXT / MD / CSV / images and reason over them. Supports up to 128K architectural context, subject to device and runtime memory limits. Research automatically switches to BM25 retrieval when the effective prompt budget is exceeded. A context inspector shows exactly what the model sees. Scanned PDFs get OCR'd by the on-device vision tower with per-page progress and ETA, then export as structured Markdown with page headings and OCR markers. Global context cap is controlled from the top bar. |
-| **Code** | Agentic coding workstation: explorer + editor + harness. See *Code — Agentic IDE* below. |
+| **Code** | File-aware chat workstation: explorer + editor + chat over project files. See *Code — Chat with files* below. |
 | **Reports** | Staged report generation tuned for greedy decoding: JSON outline → one bounded section at a time → charts emitted as JSON specs rendered by Chart.js (never model-written JS). Export produces a self-contained `.html` with charts baked in as PNGs — it renders offline with zero JavaScript. Global context cap from the top bar applies to each stage. |
 
 Everything is saved locally in IndexedDB (`gemma4-workstation-v1`): conversations,
@@ -64,31 +64,42 @@ reports, parsed documents and code projects (`code-project-v3`). Nothing syncs a
 
 ### Top-bar Context Control
 
-The `Context` selector in the workstation top bar (Auto / 8K / 16K / 32K / 64K / 128K) caps the **effective context window shared across Chat, Research, Code and Reports**. `Auto` lets the device use its full runtime capacity (reported in the status pill as `runtime X K / 128K`). Selecting e.g. `32K` triggers an on-device KV-cache re-allocation and the pill then shows `runtime 32K / 128K` once the allocation succeeds. Lower caps are useful to simulate smaller GPUs or to keep prompts bounded. Research shows a live inspector of what fits; Code’s agent panel shows a token estimate and respects the same budget via BM25 retrieval + history compaction.
+The `Context` selector in the workstation top bar (Auto / 8K / 16K / 32K / 64K / 128K) caps the **effective context window shared across Chat, Research, Code and Reports**. `Auto` lets the device use its full runtime capacity (reported in the status pill as `runtime X K / 128K`). Selecting e.g. `32K` triggers an on-device KV-cache re-allocation and the pill then shows `runtime 32K / 128K` once the allocation succeeds. Lower caps are useful to simulate smaller GPUs or to keep prompts bounded. Research shows a live inspector of what fits; Code's chat panel shows a token estimate and truncates oversize attachments with a visible notice.
 
-### Code — Agentic IDE
+### Code — Chat with files
 
-A browser-native, OpenCode/Codex-inspired workspace:
+A browser-native workspace for iterating over code with the model:
 
 **Layout**
 
 - **Left — Explorer** (`280px`): collapsible tree with folders/files (create / rename / move by drag-and-drop or `⋯` menu, delete). Toolbar: `+ File`, `+ Folder`, `⬆ Zip` (upload a `.zip` — fflate-unzipped, text files merged into the virtual FS), `⬇ Zip` (download entire project), `Reset` (restores `README.md` + `main.py` + `index.html`/`style.css`/`script.js`).
-- **Center — Editor + Output**: Syntax-highlighted editor for Python / JS / HTML / CSS / JSON / Markdown, tab bar for open files, selection-aware. Bottom dock: `Output` (Pyodide stdout/stderr/plots) vs `Preview` (sandboxed iframe for Web — `allow-scripts` only, inlines `style.css`/`script.js` into `index.html`). `▶ Run` executes the active file (`.py` → Pyodide with full FS sync so `import utils.helpers` works; `.html` → Preview). Web preview auto-runs on edit (debounced).
-- **Right — Agent** (`380px`): chat transcript with thinking blocks, tool cards, and status. The controller asks the model for a short checklist once, then assigns exactly one task at a time and observes one tool result before continuing.
+- **Center — Editor + Output**: Syntax-highlighted editor for Python / JS / HTML / CSS / JSON / Markdown, tab bar for open files, selection-aware. Bottom dock: `Console` (Pyodide stdout/stderr/plots **and** preview `console.*` output) vs `Preview` (sandboxed iframe — `allow-scripts` only, no same-origin). `▶ Run` always acts on the **active file only**: `.py` → Pyodide with full FS sync so `import utils.helpers` works; `.html` → renders *that* HTML file in Preview. CSS/JS/Markdown have no runner (the button is disabled rather than guessing another file). Editing an HTML file re-renders it, and editing a stylesheet/script that the previewed page references re-renders that same page in place.
+- **Right — Chat with files** (`400px`): read-only Q&A over your project files. Attach files with `@`-mentions, the attachment bar, editor selections, or right-click → Explain / Review / Add to Chat. Suggested code ships with a **Copy** button per snippet — you paste it into the editor yourself. Chat never edits files.
 
-**How the agent works**
+**Package management (offline-ready)**
 
-- **Agent controller** (`src/agent/controller.js` + `src/agent/protocol.js`): asks for a bounded checklist in the answer channel, then sends the original request plus only the active checklist item to each worker turn. Thinking text is display-only and is never parsed for plans or tools. The worker can emit one JSON tool envelope or an explicit `<done>` marker. Tool results are fed back as short observations; failed tools block completion, missing preview entries cannot fall back to another HTML file, and interactive web tasks must pass the sandbox probe. Local execution adapters validate permissions and capture undo snapshots.
-- **Tools** (JSON):
-  - `list_files`, `read_file`, `write_file`, `append_file` (continue a large file one bounded chunk at a time), `apply_patch`, `delete_file`, `mkdir`, `search` (BM25 over the codebase), `run_python` (syncs virtual FS → Pyodide, captures plots, syntax-checks interactive programs without executing them), `run_web` (renders via `WebRunner` + bridges console), `install_package` (micropip).
-- **Selection context**: highlight code in the editor → bar appears `→ Add selection`. Clicking attaches that snippet as an extra block in the next agent turn (`[User selected code from path]`), so you can scope fixes without stuffing the whole repo. Mirrors Claude Code’s selection flow.
-- **Python/Web decoupling**: the file tree is runtime-agnostic. You can mix `app.py` and `web/` in one project; runners dispatch by extension (`.py` → Pyodide, `.html/.css/.js` → iframe). `import` works across folders (`a/b.py` → `from a.b import x` via Pyodide FS).
+- The `📦 Packages` dialog lists **34 bundled pure-Python packages** that install **from disk with no network**:
+  - *General*: rich, tabulate, tqdm, python-dateutil, pytz, packaging, attrs, more-itertools, toolz, beautifulsoup4, networkx, pyparsing, Pygments, chardet, openpyxl, markdown, texttable, humanize, xmltodict, six.
+  - *Data science*: **seaborn, mlxtend, imbalanced-learn, yellowbrick, pingouin, faker, arrow, numpy-financial, prettytable, xlsxwriter, natsort, glom, petl, tzdata**.
+- Anything else installs from PyPI via micropip, or loads from the Pyodide distribution when available.
+- Running a `.py` file scans its imports and installs any bundled package it needs — so `import seaborn` works offline. Data-science packages that build on Pyodide's binary wheels (numpy, pandas, matplotlib, scipy, scikit-learn, statsmodels) get those loaded automatically, and each entry shows what it needs.
+- **Cache scientific stack** pre-loads numpy, pandas, matplotlib, scipy, scikit-learn and sympy so they are cached for later offline use (Pyodide's CDN responses go through the service worker).
+- Wheels live in `vendor/python-packages/` and are generated by `npm run vendor:python` (`node tools/vendor-python-packages.mjs`, `--force` to re-download, `--list` to show the curated set). Pyodide's own binary packages are not duplicated; curated packages with no pure-Python wheel (e.g. PyYAML) are reported as PyPI-only.
+- `sw.js` caches every `.whl` (vendored *and* downloaded from PyPI) cache-first, so installed packages keep working offline; `manifest.json` is deliberately revalidated so a re-vendor is picked up.
+
+**How file chat works**
+
+- **File context**: `@`-mention a file to attach it (autocomplete popup), right-click → *Explain / Review / Add to Chat*, or highlight code → *Add selection*. Up to 8 attachments persist across turns so follow-ups ("now fix the loop") keep working; oversize files are head-truncated with a visible notice.
+- **Selection context**: highlight code in the editor → bar appears `→ Add selection`. Clicking attaches that snippet to the next chat turn, so you can scope questions without stuffing the whole repo.
+- **Python/Web decoupling**: the file tree is runtime-agnostic. You can mix `app.py` and `web/` in one project; runners dispatch by the active file's own extension (`.py` → Pyodide, `.html` → sandboxed preview; everything else is edit-only). `import` works across folders (`a/b.py` → `from a.b import x` via Pyodide FS), and the preview inlines whatever relative CSS/JS an HTML entry point references — nested folders and any file names, resolved from the project itself.
+
+> **⚠️ Keep code runs bounded.** Both runtimes share the browser's main thread, so a `while True:` loop with no `break` (Python) or an endless `while (true)` loop in previewed JavaScript freezes the whole tab — including the `⏹ Stop` button — and the tab has to be reloaded. The app warns before running a Python `while True:` loop without a `break`, and tells you on the next load if a previous run never finished. Move the runtime into a Web Worker if you need pre-emptible execution.
 
 **Quick start**
 
 1. Open **Code** → Explorer shows the default project. Pick `main.py` or `index.html`.
-2. Type a request in the Agent panel, e.g. *“add a todo list with localStorage”* → `Send`.
-3. Watch tool calls stream (`read_file → write_file → run_web`). Edit manually in the editor if needed — the agent sees your edits next turn.
+2. Type `@main.py` (or right-click → *Explain this file*) and ask, e.g. *“what does this do?”* → `Send`.
+3. Read the answer, hit **Copy** on a suggested snippet, paste it into the editor, then `▶ Run` to verify.
 4. Select a buggy block → `Add selection` → *“fix the off-by-one here”*.
 5. `⬆ Zip` to import an existing codebase, `⬇ Zip` to export, `Reset` to start fresh. All files persist in IndexedDB.
 
@@ -255,22 +266,37 @@ Details, console expectations, and upstream links:
 
 ```text
 .
-├── index.html                      Chat UI + load/generate orchestration (image attach UI)
+├── index.html                      Workstation shell: landing hero + hash-routed app frame
+├── landing.js                      Three.js landing scene
+├── sw.js                           Service worker: app shell + CDN/library + wheel caches
+├── manifest.webmanifest, icon.svg  PWA install metadata
 ├── gemma-4-e2b.js                  WebGPU inference engine + embedded WGSL (vision hooks applied)
 ├── gemma4-vision.js                Vision tower: preprocessing + 16-layer WGSL encoder + pooling + projection
 ├── gemma4-vision-inject.js         Wraps Gemma4Mobile so generate() accepts image content + injects features
 ├── gemma4-sg-guard.js              NVIDIA/Windows subgroup correctness guard (MIT, from Ar5en1c)
-├── landing.js                      Three.js landing scene
 ├── test-vision.html                WebGPU vision test harness (QAT matmul vs CPU + encode sanity)
+├── apps/
+│   ├── chat/app.js                 Chat: vision input, conversation history, .md export
+│   ├── research/app.js             Documents: PDF/DOCX/TXT parsing, retrieval Q&A, OCR
+│   ├── reports/app.js              Staged report generation, charts, self-contained HTML export
+│   └── code/                       Code app
+│       ├── app.js                  Explorer + editor + preview/console + file chat
+│       ├── components/             explorer.js, editor-cm.js (CodeMirror 6 wrapper)
+│       └── runners/                web-runner.js, pyodide-runner.js, python-packages.js
 ├── src/
-│   └── model-config.js             Weight URL config (HF Hub default, ?localweights=1 override)
-├── models/
-│   └── README.md                   Optional local weights drop-in (see below)
+│   ├── model-config.js             Weight URL config (HF Hub default, ?localweights=1 override)
+│   ├── lib/                        markdown.js, chat-thread.js, zip-utils.js, document-markdown.js
+│   ├── services/                   model-service, generation, db, context, code-project, settings, …
+│   └── shell/router.js             Hash router (lazy app mounting)
+├── vendor/python-packages/         Offline pure-Python wheels + manifest.json + LICENSES.md
+├── models/README.md                Optional local weights drop-in (see below)
 ├── tools/
-│   └── serve.mjs                   Range-capable static server (required for weight streaming)
+│   ├── serve.mjs                   Range-capable static server (required for weight streaming)
+│   ├── vendor-python-packages.mjs  Downloads/refreshes the offline Python bundle
+│   └── check-release.mjs           Pre-release checks (module graph, import map, bundle)
 ├── VISION.md                       Vision architecture + implementation notes
 ├── NVIDIA-WINDOWS-GIBBERISH-FIX.md Deep dive on the Windows gibberish bug
-├── CHANGELOG.md                    Release history
+├── CHANGELOG.md, THIRD_PARTY_NOTICES.md
 └── README.md                       This file
 ```
 
@@ -311,6 +337,17 @@ or `nosubgroups-fallback`. On Windows you should **not** see `exact32-stock {}`
   landing scene, loaded from jsDelivr.
 - **marked** ([MIT](https://github.com/markedjs/marked/blob/master/LICENSE.md)) —
   markdown rendering in the chat, loaded from esm.sh.
+- **[Pyodide](https://pyodide.org)** ([MPL-2.0](https://github.com/pyodide/pyodide/blob/main/LICENSE))
+  — the WebAssembly CPython runtime behind the Code app's Python execution,
+  loaded from jsDelivr.
+- **The Python packages in `vendor/python-packages/`** — 49 pure-Python wheels
+  redistributed unmodified (MIT / BSD / Apache-2.0 / 0BSD / PSF-2.0, plus
+  `pingouin` GPL-3.0 and `tqdm` MPL-2.0 AND MIT). Per-package licenses:
+  [vendor/python-packages/LICENSES.md](vendor/python-packages/LICENSES.md).
+- **CodeMirror 6**, **Lezer**, **KaTeX**, **Chart.js**, **fflate**, **pdf.js**
+  and **mammoth.js** — editor, math, charts, zip and document parsing, loaded
+  from esm.sh / cdnjs. Full list in
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Upstream Space: https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels  
 This repo: https://github.com/<your-username>/gemma-4-webgpu-kernels

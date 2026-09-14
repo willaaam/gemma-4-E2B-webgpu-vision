@@ -15,7 +15,11 @@ export function registerRoute(id, { title, container, app }) {
 }
 
 export function currentRoute() {
-  const h = location.hash.replace(/^#\/?/, "").split(/[/?]/)[0];
+  // Tolerate percent-encoded hashes (proxies and shared links sometimes rewrite
+  // "#/code" as "#%2Fcode"); decode first so the route still resolves.
+  let raw = location.hash;
+  try { raw = decodeURIComponent(raw); } catch { /* malformed escape — use as-is */ }
+  const h = raw.replace(/^#\/?/, "").split(/[/?]/)[0];
   return h || "";
 }
 
