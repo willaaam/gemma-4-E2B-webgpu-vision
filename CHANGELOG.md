@@ -5,7 +5,35 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No changes yet._
+### Added
+
+- **Code: Run selection for Python** — highlighting code in a `.py` file shows a
+  `▶ Run selection` button next to `▶ Run Python`. It runs just the highlighted
+  code, exactly as written — the file itself is not executed. Output is appended
+  to the Python console (the log is kept, not cleared) and plots render inline.
+- **Code: `clear` resets the Python environment** — clearing the Python console
+  also drops every user-defined variable, function and class, evicts runtime
+  imports from `sys.modules`, and closes open matplotlib figures, so the next
+  run starts clean instead of reusing stale state. The console confirms what was
+  cleared (e.g. "cleared 2 variables and 1 module"). Installed packages stay
+  cached — the next `import` simply re-executes them fresh. The web console is
+  unaffected.
+
+### Fixed
+
+- **Code: Python and web output shared one console** — the Console tab now keeps
+  a separate buffer per runner and is labelled `Console · Python` or
+  `Console · Web`, so Python stdout/stderr and the preview's `console.*` output no
+  longer interleave. Opening or running a file points the console at that runner;
+  output arriving while its console is off screen is counted with a badge on the
+  tab (cleared when you open it). `clear` empties only the console you are looking
+  at, and each preview render starts a fresh web log, the way a page reload does.
+- **Code: the Preview tab was offered for files that cannot preview** — it now
+  appears only when it is relevant to the file being edited: an HTML file, or an
+  asset the currently previewed page references (so editing a stylesheet still
+  shows its live effect). Editing a Python file no longer shows a Preview tab
+  that does nothing, and opening an HTML file renders it straight away so the
+  pane is never blank.
 
 ## [3.0.0] — 2026-09-13
 

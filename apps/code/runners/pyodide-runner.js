@@ -12,6 +12,9 @@ let loadingPromise = null;
 let interruptBuffer = null;
 let isExecuting = false;
 let currentRunAbort = null;
+// Pristine interpreter state captured right after boot (see loadPyodideRuntime).
+// Used by resetPythonNamespace to distinguish runtime internals from user state.
+let pristineSnapshot = { modules: [], globals: [] };
 const PYODIDE_VERSION = "0.26.4";
 const INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
@@ -148,6 +151,26 @@ export async function loadPyodideRuntime({ onStatus } = {}) {
       });
 
       try { window.__pyodide = pyodide; } catch (_) {}
+
+      // Snapshot the pristine interpreter state right after boot, so a later
+      // reset knows exactly what to keep. Capturing this lazily at reset time
+      // would be wrong — by then the namespace already holds user state.
+      // NOTE: this must not use an `import` statement: `import sys, json`
+      // would bind those names in __main__, poisoning the keep-list so `sys`
+      // survives every reset. `__import__` is a builtin and binds nothing.
+      try {
+        const modulesSnap = pyodide.runPython("sorted(__import__('sys').modules.keys())");
+        const globalsSnap = pyodide.runPython("sorted(dir())");
+        pristineSnapshot = {
+          modules: [...modulesSnap],
+          globals: [...globalsSnap],
+        };
+        try { modulesSnap.destroy?.(); } catch {}
+        try { globalsSnap.destroy?.(); } catch {}
+      } catch (e) {
+        console.warn("[pyodide] could not snapshot pristine namespace:", e);
+      }
+
       onStatus?.("Python ready.");
       return pyodide;
     })();
@@ -175,6 +198,71 @@ export function stopPython() {
     currentRunAbort = null;
   }
   isExecuting = false;
+}
+
+/**
+ * Reset the Python interpreter namespace: drop every user-defined global
+ * (variables, functions, classes) and every module imported at runtime, so the
+ * next run starts from a clean slate. The runtime itself (stdout/stderr/stdin
+ * handlers, interrupt buffer) is left intact, and project files stay synced.
+ *
+ * Installed packages are NOT uninstalled — their code stays cached — but their
+ * modules are evicted from `sys.modules`, so the next `import x` re-executes
+ * the module fresh instead of reusing stale state.
+ */
+export async function resetPythonNamespace() {
+  if (!pyodide) return { cleared: [], modules: [] };
+  if (isExecuting) stopPython();
+  clearStdin();
+  try {
+    // The keep-lists come from the pristine boot snapshot (JS side), never from
+    // the live namespace — snapshotting live state would treat user variables
+    // as "keep" and clear nothing.
+    pyodide.globals.set("__ws_keep_modules", pyodide.toPy(pristineSnapshot.modules));
+    pyodide.globals.set("__ws_keep_globals", pyodide.toPy(pristineSnapshot.globals));
+    // NOTE: no `import` statements in this script. An `import sys` here would
+    // bind `sys` in __main__ before the clear list is computed, so it would
+    // either be wrongly kept (if snapshotted) or wrongly reported as cleared.
+    // `__import__` is a builtin and binds nothing.
+    const report = await pyodide.runPythonAsync(`
+__ws_sys = __import__("sys")
+__ws_cleared = [name for name in list(dir())
+                if not name.startswith("__")
+                and name not in set(__ws_keep_globals)
+                and name not in ("__ws_sys", "__ws_keep_modules", "__ws_keep_globals",
+                                 "__ws_cleared", "__ws_evicted", "__ws_name")]
+for __ws_name in __ws_cleared:
+    try:
+        del globals()[__ws_name]
+    except Exception:
+        pass
+__ws_evicted = [name for name in list(__ws_sys.modules.keys())
+                if name not in set(__ws_keep_modules) and not name.startswith("__ws_")]
+for __ws_name in __ws_evicted:
+    try:
+        del __ws_sys.modules[__ws_name]
+    except Exception:
+        pass
+try:
+    __import__("matplotlib.pyplot").close("all")
+except Exception:
+    pass
+for __ws_name in ("__ws_sys",):
+    try:
+        del globals()[__ws_name]
+    except Exception:
+        pass
+{"cleared": list(__ws_cleared), "modules": list(__ws_evicted)}
+`);
+    const js = typeof report?.toJs === "function" ? report.toJs({ dict_converter: Object.fromEntries }) : report;
+    try { report?.destroy?.(); } catch {}
+    return {
+      cleared: [...(js?.cleared ?? [])].map(String),
+      modules: [...(js?.modules ?? [])].map(String),
+    };
+  } catch (err) {
+    return { cleared: [], modules: [], error: String(err?.message ?? err) };
+  }
 }
 
 /**

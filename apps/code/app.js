@@ -12,7 +12,7 @@ import { createEditor } from "./components/editor-cm.js";
 import { createExplorer } from "./components/explorer.js";
 import {
   loadPyodideRuntime, runPython, isPyodideLoaded,
-  syncFilesToPyFS, stopPython, queueStdin, installedPackages
+  syncFilesToPyFS, stopPython, queueStdin, installedPackages, resetPythonNamespace
 } from "./runners/pyodide-runner.js";
 import {
   bundledPackages, installBundledPackage, installPackagePreferred, ensureBundledImports,
@@ -40,9 +40,13 @@ let unsubModel = null;
 let unsubContext = null;
 let runner = null;
 let saveDebounce = 0;
-// Single console buffer shared by the Python runtime and the web preview.
-// Entries are {level, text, source} — source is "python" | "web".
-let consoleLogs = [];
+// Per-runner console buffers. Python stdout/stderr and the web preview's
+// console.* output are kept apart, so one runner's output never buries the
+// other's. The Console tab shows one buffer at a time (see consoleScope).
+let pythonLogs = [];
+let webLogs = [];
+let consoleScope = "python"; // which buffer the Console tab is showing: "python" | "web"
+let unseenLogs = { python: 0, web: 0 }; // lines that arrived while off screen
 let outCollapsed = false;
 let editorSetting = false;
 let mentionState = null; // {query, start, end}
@@ -110,8 +114,12 @@ export const codeApp = {
     }
     if (!getThinking()) setThinking(true);
     els = {};
-    consoleLogs = [];
+    pythonLogs = [];
+    webLogs = [];
+    consoleScope = "python";
+    unseenLogs = { python: 0, web: 0 };
     previewEntry = null;
+    previewDeps = new Set();
     chatHistory = [];
     attachments = [];
     pendingImage = null;
@@ -271,6 +279,7 @@ function buildDom(root) {
               <button class="ws-btn ghost tiny ws-out-toggle" data-role="toggleOut" title="Collapse/Expand">▾</button>
               <button class="ws-btn ghost small" data-role="pkgBtn" title="Install Python packages from PyPI">📦 Packages</button>
               <button class="ws-btn ghost small" data-role="runBtn">▶ Run</button>
+              <button class="ws-btn ghost small" data-role="runSelBtn" hidden title="Run the highlighted code in the active Python file">▶ Run selection</button>
               <button class="ws-btn danger small" data-role="stopPyBtn" hidden>⏹ Stop</button>
               <button class="ws-btn ghost tiny" data-role="clearOut">clear</button>
             </div>
@@ -356,6 +365,7 @@ function buildDom(root) {
     previewFrame: wrap.querySelector('[data-role="previewFrame"]'),
     clearOut: wrap.querySelector('[data-role="clearOut"]'),
     runBtn: wrap.querySelector('[data-role="runBtn"]'),
+    runSelBtn: wrap.querySelector('[data-role="runSelBtn"]'),
     stopPyBtn: wrap.querySelector('[data-role="stopPyBtn"]'),
     pkgBtn: wrap.querySelector('[data-role="pkgBtn"]'),
     runStatus: wrap.querySelector('[data-role="runStatus"]'),
@@ -388,6 +398,7 @@ function buildDom(root) {
 
   // tabs + out
   els.runBtn.addEventListener("click", () => runActive());
+  els.runSelBtn?.addEventListener("click", () => runSelection());
   els.stopPyBtn.addEventListener("click", () => {
     stopPython();
     pushConsole("warn", "Execution stopped by user.", "python");
@@ -433,11 +444,35 @@ function buildDom(root) {
   els.outConsole?.addEventListener("click", () => els.consoleInput?.focus());
 
 
-  els.clearOut.addEventListener("click", () => {
-    consoleLogs = [];
-    els.outConsole.replaceChildren();
-  });
+  els.clearOut.addEventListener("click", () => clearConsoleAndReset());
   els.outTabs.forEach(t => t.addEventListener("click", () => switchOut(t.dataset.out)));
+
+  // Clear the console you are looking at. For Python this also resets the
+  // interpreter namespace — variables, functions and imported modules are
+  // dropped, so the next run starts clean instead of reusing stale state.
+  async function clearConsoleAndReset() {
+    // Clears only the console you are looking at; the other runner's log stays.
+    consoleBuffer(consoleScope).length = 0;
+    unseenLogs[consoleScope] = 0;
+    els.outConsole.replaceChildren();
+    updateOutTabs();
+    if (consoleScope !== "python" || !isPyodideLoaded()) return;
+    try {
+      const { cleared = [], modules = [], error } = await resetPythonNamespace();
+      if (error) {
+        pushConsole("warn", `Environment reset failed: ${error}`, "python");
+        return;
+      }
+      const parts = [];
+      if (cleared.length) parts.push(`${cleared.length} variable${cleared.length === 1 ? "" : "s"}`);
+      if (modules.length) parts.push(`${modules.length} module${modules.length === 1 ? "" : "s"}`);
+      pushConsole("info", parts.length
+        ? `Environment reset — cleared ${parts.join(" and ")}.`
+        : "Environment reset — already clean.", "python", { notify: false });
+    } catch (err) {
+      pushConsole("warn", `Environment reset failed: ${String(err?.message ?? err)}`, "python");
+    }
+  }
 
 
   // chat composer
@@ -649,20 +684,30 @@ function runnerForPath(path) {
   return "none";
 }
 
-// True when `path` is referenced (src/href) by the HTML currently in the preview
-// pane. Lets a stylesheet/script update the page it belongs to without ever
-// switching the preview to a different entry file.
-function isDependencyOfEntry(path) {
-  if (!previewEntry || !path || !project?.has(previewEntry)) return false;
-  const html = project.getContent(previewEntry) ?? "";
-  const want = basename(path).toLowerCase();
+// Basenames the currently previewed page references (src/href), recomputed on
+// every render. Cached so frequent callers such as updateOutTabs — which runs on
+// every chat keystroke through syncState — never rescan the HTML.
+let previewDeps = new Set();
+
+function collectPreviewDeps(entryPath) {
+  const deps = new Set();
+  if (!entryPath || !project?.has(entryPath)) return deps;
+  const html = project.getContent(entryPath) ?? "";
   const refRe = /(?:src|href)\s*=\s*["']([^"']+)["']/gi;
   for (const m of html.matchAll(refRe)) {
     const ref = String(m[1] || "").split(/[?#]/)[0];
     if (!ref || /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(ref) || /^[a-z][a-z0-9+.-]*:/i.test(ref)) continue;
-    if (basename(ref.replace(/^\.\//, "")).toLowerCase() === want) return true;
+    deps.add(basename(ref.replace(/^\.\//, "")).toLowerCase());
   }
-  return false;
+  return deps;
+}
+
+// True when `path` is referenced (src/href) by the HTML currently in the preview
+// pane. Lets a stylesheet/script update the page it belongs to without ever
+// switching the preview to a different entry file.
+function isDependencyOfEntry(path) {
+  if (!previewEntry || !path) return false;
+  return previewDeps.has(basename(path).toLowerCase());
 }
 
 // Refresh after an edit. Re-renders the active HTML file, or — when the edited
@@ -956,6 +1001,7 @@ async function ensureEditor() {
           if (!currentSelection) els.selectionBar.hidden = true;
         }
         currentSelection = null;
+        refreshBottomBar();
         // keep attachments bar
         return;
       }
@@ -964,6 +1010,7 @@ async function ensureEditor() {
       els.selLabel.textContent = `${activePath}:${snippet.length} chars`;
       els.selPreview.textContent = snippet.slice(0, 600);
       els.selectionBar.hidden = false;
+      refreshBottomBar();
     }
   };
   try {
@@ -1056,9 +1103,18 @@ async function openFile(path) {
   syncState();
   explorer.setSelected(p);
   const mode = runnerForPath(p);
-  if (mode === "web") switchOut("preview");
-  else if (mode === "python") switchOut("console");
-  else refreshBottomBar();
+  if (mode === "web") {
+    // Point the console at the web log, and render on first open so the Preview
+    // pane is never blank when it appears.
+    setConsoleScope("web", { render: false });
+    switchOut("preview");
+    if (previewEntry !== p) runPreview(p);
+  } else if (mode === "python") {
+    setConsoleScope("python", { render: false });
+    switchOut("console");
+  } else {
+    refreshBottomBar();
+  }
 }
 
 function renderTabs() {
@@ -1099,6 +1155,7 @@ function renderTabs() {
 // ---- Console / Preview ----
 
 let currentRunnerMode = "console"; // "console" | "preview"
+let outTabsSyncing = false; // re-entrancy guard for updateOutTabs ↔ switchOut
 
 const MAX_CONSOLE_LINES = 600;
 
@@ -1127,6 +1184,17 @@ function refreshBottomBar() {
 
   if (els.pkgBtn) els.pkgBtn.hidden = !isPython;
 
+  // Run selection is available only when a Python file is active and there is
+  // a non-trivial selection in the editor.
+  if (els.runSelBtn) {
+    const hasSelection = isPython && !!currentSelection?.text?.trim() && currentSelection.text.trim().length >= 3;
+    els.runSelBtn.hidden = !hasSelection;
+    if (hasSelection) {
+      els.runSelBtn.title = `Run the highlighted code on its own (${basename(activePath)} is not executed)`;
+      els.runSelBtn.disabled = generating ? true : false;
+    }
+  }
+
   // Stdin input bar is visible whenever active file is Python (not tied to tab)
   if (els.consoleInputRow) {
     els.consoleInputRow.hidden = !isPython;
@@ -1137,6 +1205,8 @@ function refreshBottomBar() {
     else if (isWeb) els.runStatus.textContent = "Web";
     else els.runStatus.textContent = "No runner";
   }
+
+  updateOutTabs();
 }
 
 function switchOut(which) {
@@ -1151,13 +1221,60 @@ function switchOut(which) {
   refreshBottomBar();
 }
 
-// The Console tab is the single home for runtime output — Python stdout/stderr
-// and web preview console.* both land here.
+function consoleBuffer(scope) {
+  return scope === "web" ? webLogs : pythonLogs;
+}
+
+// Point the Console tab at one runner's buffer. Called when you open or run a
+// file, so the console on screen always belongs to what you are working on.
+function setConsoleScope(scope, { render = true } = {}) {
+  if (!scope || scope === consoleScope) return;
+  consoleScope = scope;
+  updateOutTabs();
+  if (render && currentRunnerMode === "console") renderConsole();
+}
+
+// The Preview tab appears only when it is relevant to the file you are editing:
+// an HTML file, or an asset the currently previewed page depends on (so editing
+// a stylesheet still shows its live effect). A Python-only session never shows
+// a Preview tab.
+function updateOutTabs() {
+  if (!els.outTabs || outTabsSyncing) return;
+  outTabsSyncing = true;
+  try {
+    const isWeb = runnerForPath(activePath) === "web";
+    const hasPreview = !!previewEntry && !!project?.has(previewEntry);
+    const showPreview = isWeb || (hasPreview && isDependencyOfEntry(activePath));
+    const previewTab = [...els.outTabs].find(t => t.dataset.out === "preview");
+    const consoleTab = [...els.outTabs].find(t => t.dataset.out === "console");
+    if (previewTab) previewTab.hidden = !showPreview;
+    if (consoleTab) {
+      const label = consoleScope === "web" ? "Web" : "Python";
+      consoleTab.replaceChildren(document.createTextNode(`Console · ${label}`));
+      const unseen = unseenLogs[consoleScope] ?? 0;
+      if (unseen > 0) {
+        const badge = document.createElement("span");
+        badge.className = "ws-badge";
+        badge.textContent = String(unseen);
+        badge.title = `${unseen} new line${unseen === 1 ? "" : "s"} — click to show`;
+        consoleTab.appendChild(badge);
+      }
+    }
+    // If Preview just disappeared while it was on screen, fall back to Console.
+    if (!showPreview && currentRunnerMode === "preview") switchOut("console");
+  } finally {
+    outTabsSyncing = false;
+  }
+}
+
+// Renders whichever buffer the Console tab is currently pointed at.
 function renderConsole() {
+  unseenLogs[consoleScope] = 0;
   if (!els.outConsole) return;
   els.outConsole.replaceChildren();
-  for (const entry of consoleLogs) els.outConsole.appendChild(consoleLine(entry));
+  for (const entry of consoleBuffer(consoleScope)) els.outConsole.appendChild(consoleLine(entry));
   try { els.outConsole.scrollTop = els.outConsole.scrollHeight; } catch {}
+  updateOutTabs();
 }
 
 function consoleLine(entry) {
@@ -1167,16 +1284,23 @@ function consoleLine(entry) {
   return line;
 }
 
-function pushConsole(level, text, source) {
+// `notify: false` marks runner bookkeeping (the “▶ python …” banner) that should
+// not light up the unread badge on the Console tab.
+function pushConsole(level, text, source, { notify = true } = {}) {
   const src = source || (runnerForPath(activePath) === "web" ? "web" : "python");
-  const entry = { level, text, source: src };
-  consoleLogs.push(entry);
-  if (consoleLogs.length > MAX_CONSOLE_LINES) consoleLogs.splice(0, consoleLogs.length - MAX_CONSOLE_LINES);
-  // Web logs must never steal focus from what the user is doing; they simply
-  // accumulate in the Console tab.
-  if (!els.outConsole || currentRunnerMode !== "console") return;
+  const buffer = consoleBuffer(src);
+  buffer.push({ level, text, source: src });
+  if (buffer.length > MAX_CONSOLE_LINES) buffer.splice(0, buffer.length - MAX_CONSOLE_LINES);
+  // Only the active runner's console is on screen; the other keeps accumulating
+  // in the background and is flagged with a badge so nothing is missed.
+  const visible = currentRunnerMode === "console" && src === consoleScope;
+  if (!visible) {
+    if (notify) unseenLogs[src] = (unseenLogs[src] ?? 0) + 1;
+    updateOutTabs();
+    return;
+  }
   if (outCollapsed) ensureOutExpanded();
-  els.outConsole.appendChild(consoleLine(entry));
+  els.outConsole.appendChild(consoleLine({ level, text, source: src }));
   try { els.outConsole.scrollTop = els.outConsole.scrollHeight; } catch {}
 }
 
@@ -1196,14 +1320,92 @@ async function runActive() {
   }
 }
 
+// Run the highlighted code in the active Python file — just the selection,
+// exactly as written. Output is appended to the Python console (the log is
+// kept, not cleared) and plots are shown inline.
+async function runSelection() {
+  if (runnerForPath(activePath) !== "python") {
+    pushConsole("info", "Run selection is only available for Python files.", "python");
+    return;
+  }
+  const snippet = currentSelection?.text?.trim();
+  if (!snippet || snippet.length < 3) {
+    showAppToast("Highlight some code first, then run the selection", "info");
+    return;
+  }
+  ensureOutExpanded();
+  setConsoleScope("python", { render: false });
+  switchOut("console");
+  pushConsole("info", `▶ selection (${snippet.length} chars from ${activePath})`, "python", { notify: false });
+
+  // Pyodide executes on the browser main thread, so an endless loop blocks
+  // rendering *and* the Stop button — the tab can only be recovered by closing
+  // it. Warn before that happens rather than after.
+  if (/^\s*while\s+True\s*:/m.test(snippet) && !/\bbreak\b/.test(snippet)) {
+    pushConsole("warn", "This selection has an unbounded `while True:` loop with no `break`. An endless run will freeze this tab and need a reload — use a counter or `break` to bound it.", "python");
+    showAppToast("Warning: unbounded `while True:` loop — an endless run will freeze the tab", "error");
+  }
+  try { localStorage.setItem(RUN_PENDING_KEY, String(Date.now())); } catch {}
+
+  if (els.stopPyBtn) els.stopPyBtn.hidden = false;
+  if (els.runBtn) els.runBtn.hidden = true;
+  if (els.runSelBtn) els.runSelBtn.hidden = true;
+
+  const streamToConsole = {
+    onStdout: (s) => pushConsole("log", s, "python"),
+    onStderr: (s) => pushConsole("warn", s, "python"),
+  };
+
+  try {
+    if (!isPyodideLoaded()) {
+      pushConsole("info", "Booting Python runtime...", "python");
+      await loadPyodideRuntime({ onStatus: s => pushConsole("info", s, "python") });
+    }
+    // Packages vendored under vendor/python-packages install from disk, so a
+    // snippet that imports e.g. rich/networkx runs even with no network.
+    try {
+      const bundled = await ensureBundledImports(snippet, { onStatus: s => pushConsole("info", s, "python") });
+      if (bundled.length) pushConsole("info", `Offline bundle: ${bundled.join(", ")}`, "python");
+    } catch (err) {
+      console.warn("[code] offline bundle check failed", err);
+    }
+    await syncFilesToPyFS(project);
+    const res = await runPython(snippet, streamToConsole);
+    if (res.result) pushConsole("log", `=> ${res.result}`, "python");
+    if (res.error) pushConsole("error", res.error, "python");
+    for (const png of res.plots ?? []) {
+      const img = document.createElement("img");
+      img.className = "ws-plot";
+      img.src = png;
+      els.outConsole.appendChild(img);
+    }
+    if (res.ok) pushConsole("info", "✔ selection finished", "python");
+    else pushConsole("error", "✖ selection failed or was interrupted", "python");
+    syncState();
+    return res;
+  } catch (err) {
+    pushConsole("error", String(err?.message ?? err), "python");
+    return { ok: false, error: String(err) };
+  } finally {
+    if (els.stopPyBtn) els.stopPyBtn.hidden = true;
+    if (els.runBtn) els.runBtn.hidden = false;
+    refreshBottomBar();
+    // The run returned, so the tab is healthy again.
+    try { localStorage.removeItem(RUN_PENDING_KEY); } catch {}
+  }
+}
+
 
 async function runPythonFile(path) {
   ensureOutExpanded();
   switchOut("console");
   const code = project.getContent(path) ?? "";
+  // Each run starts a fresh Python console; the web log is left untouched.
+  setConsoleScope("python", { render: false });
+  pythonLogs.length = 0;
+  unseenLogs.python = 0;
   els.outConsole.replaceChildren();
-  consoleLogs = [];
-  pushConsole("info", `▶ python ${path}`, "python");
+  pushConsole("info", `▶ python ${path}`, "python", { notify: false });
 
   // Pyodide executes on the browser main thread, so an endless loop blocks
   // rendering *and* the Stop button — the tab can only be recovered by closing
@@ -1274,8 +1476,14 @@ function runPreview(entry = null) {
       return { ok: false, error: message };
     }
     previewEntry = htmlFile;
+    previewDeps = collectPreviewDeps(htmlFile);
+    setConsoleScope("web", { render: false });
+    // A render reloads the page, so its console starts empty — like devtools on
+    // navigation. Python output is unaffected.
+    webLogs.length = 0;
+    unseenLogs.web = 0;
     const ready = runner.run(project, { entry: htmlFile });
-    pushConsole("info", `▶ preview ${htmlFile}`, "web");
+    pushConsole("info", `▶ preview ${htmlFile}`, "web", { notify: false });
     switchOut("preview");
     return { ok: true, entry: htmlFile, ready };
   } catch (e) {

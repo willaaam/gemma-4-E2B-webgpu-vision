@@ -1374,10 +1374,18 @@
   .ws-tab {
     border: 0; background: none; color: var(--t3); font-size: 13px;
     padding: 6px 12px; border-radius: 8px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
   }
   .ws-tab:hover { color: var(--t1); }
   .ws-tab.active { color: var(--t1); background: var(--panel-hover); }
   .ws-tab.small { font-size: 12px; padding: 4px 10px; }
+  /* unread count on the Console tab when output arrived while it was off screen */
+  .ws-badge {
+    display: inline-grid; place-items: center;
+    min-width: 15px; height: 15px; padding: 0 4px;
+    border-radius: 999px; background: var(--ok); color: #04120a;
+    font-size: 9.5px; font-weight: 600; line-height: 1;
+  }
 
   .ws-editor-tabs { display: flex; gap: 2px; padding: 6px 10px 0; flex: none; flex-wrap: wrap; min-height: 34px; }
   .ws-editor {
