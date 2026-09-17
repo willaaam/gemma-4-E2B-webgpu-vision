@@ -126,14 +126,20 @@ jobs:
           echo "draft: ${is_draft:-<unset>}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists - replacing its assets and notes"
+            was_draft=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+            echo "Release $TAG already exists (draft=$was_draft) - replacing its assets and notes"
             # Delete first: the set of files can change between versions, so an artifact
             # that is no longer produced would otherwise linger on the release.
             for name in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
               gh release delete-asset "$TAG" "$name" --yes
             done
             gh release upload "$TAG" dist/release/*
-            if [ "$is_draft" = "true" ]; then
+            if [ "$is_draft" = "true" ] && [ "$was_draft" = "false" ]; then
+              # The `draft` input defaults to true (right for a brand-new release) but a
+              # re-run must never silently un-publish a live one and break its download URL.
+              echo "::warning::ignoring draft=true — $TAG is already published"
+              gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            elif [ "$is_draft" = "true" ]; then
               gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=true
             else
               # --draft=false also publishes a release that was previously a draft.
