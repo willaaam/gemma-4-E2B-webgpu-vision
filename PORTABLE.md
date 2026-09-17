@@ -130,10 +130,13 @@ The release workflow then:
 3. runs `vendor:model` — `models/**` is gitignored, so a fresh clone has **no tokenizer or
    configs**, and the release genuinely needs them (`build:release` fails loudly rather
    than publishing an artifact that cannot work offline);
-4. runs `npm test`, then `build:release`, which itself refuses to finish if an asset would
-   exceed the 2 GiB limit;
-5. takes the notes from the CHANGELOG via `npm run changelog <version>`, and
-6. creates the release, or updates and re-uploads if it already exists (`--clobber`).
+4. runs `npm test`, then `build:release`, which clears previous output, refuses to finish if
+   an asset would exceed the 2 GiB limit, and emits the zip plus `SHA256SUMS.txt`;
+5. builds the release notes as `docs/RELEASE-HOWTO.md` (the how-to-use steps, so the release
+   page is useful on its own) followed by a condensed changelog section via
+   `npm run changelog <version> --brief --usage docs/RELEASE-HOWTO.md` — the full detail
+   stays in `CHANGELOG.md`; and
+6. creates the release, or replaces the assets and notes if it already exists.
 
 Running the workflow manually creates a **draft** by default, so you can inspect the assets
 before they go public. Pushing a tag publishes straight away.

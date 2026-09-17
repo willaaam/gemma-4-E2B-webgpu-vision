@@ -211,9 +211,10 @@ full picture, the measurements, limits and fallbacks.
 
 Releases are automated: pushing a `v*` tag runs `.github/workflows/release.yml`, which
 checks the tag against `package.json`, vendors the runtime and the model sidecars, runs the
-suite, packages both artifacts and attaches them to the GitHub Release (with the notes
-taken from this changelog). Run it manually to get a draft first. `npm run changelog <ver>`
-prints the section for a version.
+suite, then attaches the zip and its `SHA256SUMS.txt`. The release page opens with the
+how-to-use steps from `docs/RELEASE-HOWTO.md` followed by a condensed changelog section —
+the full detail stays in [CHANGELOG.md](CHANGELOG.md). Run the workflow manually to get a
+draft first. `npm run changelog <ver> [--brief] [--usage <file>]` prints the notes locally.
 
 ---
 

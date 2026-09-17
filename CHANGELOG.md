@@ -14,15 +14,17 @@ _No changes yet._
 - **Automated releases** — `.github/workflows/release.yml` builds and attaches the portable
   release on a `v*` tag (or a manual run, which drafts by default): it rejects a tag that
   disagrees with `package.json`, caches and vendors the offline runtime, fetches the model
-  sidecars, runs the suite, packages both artifacts and takes the release notes from this
-  changelog via `npm run changelog <version>`. Re-running updates the existing release with
-  `--clobber` instead of failing. A companion `ci.yml` runs `npm ci && npm test` on pushes
-  and PRs. Supporting changes: `npm run vendor:model` downloads the tokenizer and configs
-  (`models/**` is gitignored, so a fresh clone and CI have none — `build:release` now fails
-  loudly rather than shipping an artifact that cannot work offline), `build:release` also
-  publishes the bare single-file HTML with a checksum for both artifacts and exits non-zero
-  if an asset would exceed GitHub's 2 GiB per-file limit, `package-lock.json` is no longer
-  in `.gitignore` (`npm ci` needs it tracked), and Node is pinned via `engines`.
+  sidecars, runs the suite, then packages the zip and its `SHA256SUMS.txt`. Release notes
+  are the how-to-use steps (`docs/RELEASE-HOWTO.md`) followed by a condensed changelog
+  section, produced by `npm run changelog <version> --brief --usage …`; the full detail
+  stays here. Re-running replaces the existing release's assets and notes instead of
+  failing. A companion `ci.yml` runs `npm ci && npm test` on pushes and PRs. Supporting
+  changes: `npm run vendor:model` downloads the tokenizer and configs (`models/**` is
+  gitignored, so a fresh clone and CI have none — `build:release` now fails loudly rather
+  than shipping an artifact that cannot work offline), `build:release` clears previous
+  output and exits non-zero if an asset would exceed GitHub's 2 GiB per-file limit,
+  `package-lock.json` is no longer in `.gitignore` (`npm ci` needs it tracked), and Node is
+  pinned via `engines`.
 - **Portable single-file release** — `npm run build:portable` produces one
   `gemma4-workstation.html` (~3 MB: every module, stylesheet and font inlined) that runs
   the entire workstation from disk with **no server and no installation**. Since a

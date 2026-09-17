@@ -151,16 +151,8 @@ const zipPath = join(OUT_DIR, `${baseName}.zip`);
 await writeFile(zipPath, zip);
 
 const digest = createHash("sha256").update(zip).digest("hex");
-
-// Also publish the bare HTML: it is the headline artifact (one file that runs the whole
-// app by streaming the model from the Hub) and small enough to grab on its own.
-const htmlName = `gemma4-workstation-${pkg.version}.html`;
-const htmlPath = join(OUT_DIR, htmlName);
-await copyFile(join(STAGE_DIR, "gemma4-workstation.html"), htmlPath);
-const htmlDigest = createHash("sha256").update(await readFile(htmlPath)).digest("hex");
-
 const sumsPath = join(OUT_DIR, "SHA256SUMS.txt");
-await writeFile(sumsPath, `${digest}  ${baseName}.zip\n${htmlDigest}  ${htmlName}\n`);
+await writeFile(sumsPath, `${digest}  ${baseName}.zip\n`);
 
 await rm(STAGE_DIR, { recursive: true, force: true });
 
@@ -170,8 +162,6 @@ const over = zip.length >= GITHUB_ASSET_LIMIT;
 log("────────────────────────────────────────────────────────────");
 log(`  ${relative(ROOT, zipPath)}`);
 log(`    ${zip.length} bytes  (${human(zip.length)})    sha256 ${digest.slice(0, 16)}`);
-log(`  ${relative(ROOT, htmlPath)}`);
-log(`    ${htmlName}  sha256 ${htmlDigest.slice(0, 16)}`);
 log(`  ${relative(ROOT, sumsPath)}`);
 log("");
 log(`  GitHub per-asset limit: 2.00 GiB (${GITHUB_ASSET_LIMIT} bytes)`);
