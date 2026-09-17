@@ -183,6 +183,34 @@ check(
   "parallel slices differ"
 );
 
+// --- asset layout: where the user may put model.safetensors ------------------
+//
+// The docs tell users to drop the checkpoint into the folder they pick, but not which
+// subfolder — and both are legitimate: the release zip ships it at the top level, while
+// the model directory is the obvious place next to the configs. The store must resolve
+// the engine's URL from either, and the gate must find it in either.
+const MODEL_DIR = "models/google/gemma-4-E2B-it-qat-mobile-transformers/";
+const engineWeightsUrl = `${VIRTUAL_ORIGIN}${MODEL_DIR}model.safetensors`;
+
+for (const [label, path] of [
+  ["top level", "model.safetensors"],
+  ["model directory", `${MODEL_DIR}model.safetensors`],
+]) {
+  const layout = new AssetStore();
+  layout.addFile(modelFile, path);
+  layout.addFile(jsonFile, `${MODEL_DIR}config.json`);
+  check(`layout (${label}): gate finds the model`, layout.resolveModelFile() === modelFile);
+  check(`layout (${label}): engine weight URL resolves`, layout.resolve(engineWeightsUrl) === modelFile);
+  check(`layout (${label}): sidecar resolves`, layout.resolve(`${MODEL_DIR}config.json`) === jsonFile);
+}
+
+// Having it in both places must still work — the top level wins, and the API still
+// reports a model rather than giving up on the ambiguity.
+const bothLayouts = new AssetStore();
+bothLayouts.addFile(modelFile, "model.safetensors");
+bothLayouts.addFile(modelFile, `${MODEL_DIR}model.safetensors`);
+check("layout (both): still resolves a model", bothLayouts.resolveModelFile() === modelFile);
+
 // --- report ------------------------------------------------------------------
 
 console.log(`\nasset-fetch: ${passed} passed, ${failures.length} failed`);

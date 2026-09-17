@@ -22,7 +22,9 @@ compressor closes the gap. The app streams it from the Hugging Face Hub instead.
 To run **fully offline**, download
 [`model.safetensors`](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers/blob/main/model.safetensors)
 ([direct download](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers/resolve/main/model.safetensors))
-and drop it into `assets/`, then use the offline option above.
+and drop it into `assets/` — either at the top level, where the zip expects it, or in
+`assets/models/google/gemma-4-E2B-it-qat-mobile-transformers/` next to the configs.
+Either works; then use the offline option above.
 
 ### Requirements
 

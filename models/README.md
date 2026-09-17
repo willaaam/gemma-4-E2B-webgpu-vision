@@ -23,6 +23,8 @@ If you want to run without network access to Hugging Face:
    ([direct download](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers/resolve/main/model.safetensors))
    and place it at
    `models/google/gemma-4-E2B-it-qat-mobile-transformers/model.safetensors`.
+   This exact path matters when serving the app (step 3); the portable single-file
+   build accepts the file anywhere inside the folder you pick.
    Or fetch it with `npm run vendor:model -- --with-weights` (2.4 GB).
 2. Serve this folder with the bundled Range-capable server:
    `node tools/serve.mjs 4173`
