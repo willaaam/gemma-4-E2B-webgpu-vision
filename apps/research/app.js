@@ -11,7 +11,7 @@ import { db, newId } from "../../src/services/db.js";
 import { thinkMessages } from "../../src/services/settings.js";
 import { createChatThread } from "../../src/lib/chat-thread.js";
 import { formatDocumentMarkdown } from "../../src/lib/document-markdown.js";
-import { buildContext, renderContextBlocks, estTokens, chunkText, effectiveContextLimit, RESPONSE_TOKEN_RESERVE } from "../../src/services/context.js";
+import { buildContext, renderContextBlocks, groupBlocksByDocument, estTokens, chunkText, effectiveContextLimit, RESPONSE_TOKEN_RESERVE } from "../../src/services/context.js";
 import { getContextLimitPreference, onContextLimitChange, selectedContextLimit } from "../../src/services/context-preference.js";
 import { parseFile, isSupported, kindOf, renderPdfPageToDataUrl } from "./parsers.js";
 
@@ -833,8 +833,23 @@ function renderDocsAssistant(bubble, thinkingText, answerText, withCaret, raw = 
   });
 }
 
+function inspectorProv(text) {
+  const prov = document.createElement("div");
+  prov.className = "ws-insp-prov";
+  prov.textContent = text;
+  return prov;
+}
+
+function inspectorText(text) {
+  const pre = document.createElement("pre");
+  pre.className = "mono";
+  pre.textContent = text.length > 1200 ? `${text.slice(0, 1200)}\n… (${text.length.toLocaleString()} chars total)` : text;
+  return pre;
+}
+
 function renderInspector(ctx) {
   els.inspector.replaceChildren();
+  const groups = groupBlocksByDocument(ctx.blocks);
   const head = document.createElement("div");
   head.className = "ws-insp-head";
   const modeLabel = ctx.mode === "stuff" ? "Full-text stuffing" : ctx.mode === "bm25" ? "BM25 retrieval" : "No documents";
@@ -843,7 +858,11 @@ function renderInspector(ctx) {
   const effective = Number(ctx.effectiveContextMax ?? capabilities?.effectiveContextMax) || architectural;
   const budget = Number(ctx.budgetTokens) || 0;
   const policy = Number(ctx.contextLimit) < architectural ? ` · cap ${Number(ctx.contextLimit).toLocaleString()}` : "";
-  head.innerHTML = `<span class="ws-badge">${modeLabel}</span> ${ctx.estTokensUsed.toLocaleString()} document tokens · budget ${budget.toLocaleString()} · runtime max ${effective.toLocaleString()}${policy} · model max ${(architectural / 1024).toLocaleString()}K`;
+  // Only retrieval splits documents into chunks, so only then is the chunk count news.
+  const counted = ctx.mode === "bm25" && ctx.blocks.length
+    ? `${groups.length} document${groups.length === 1 ? "" : "s"} · ${ctx.blocks.length} chunk${ctx.blocks.length === 1 ? "" : "s"} · `
+    : "";
+  head.innerHTML = `<span class="ws-badge">${modeLabel}</span> ${counted}${ctx.estTokensUsed.toLocaleString()} document tokens · budget ${budget.toLocaleString()} · runtime max ${effective.toLocaleString()}${policy} · model max ${(architectural / 1024).toLocaleString()}K`;
   els.inspector.appendChild(head);
   if (ctx.historyTrimmed || ctx.error || ctx.allocationError) {
     const note = document.createElement("div");
@@ -851,18 +870,31 @@ function renderInspector(ctx) {
     note.textContent = ctx.error || ctx.allocationError || `Older conversation turns were removed; kept ${ctx.historyTurns ?? 0} complete turn${ctx.historyTurns === 1 ? "" : "s"}.`;
     els.inspector.appendChild(note);
   }
-  ctx.blocks.forEach((b, i) => {
+  // One entry per document, with its chunks nested inside, so a multi-document
+  // request reads as documents to compare rather than as a flat list of chunks.
+  groups.forEach((group, i) => {
+    const count = group.blocks.length;
     const item = document.createElement("details");
     item.className = "ws-insp-block";
+    item.open = true; // documents open, their chunks collapsed
+    const only = count === 1 ? group.blocks[0] : null;
     const summary = document.createElement("summary");
-    summary.textContent = `${i + 1}. ${b.label}`;
-    const prov = document.createElement("div");
-    prov.className = "ws-insp-prov";
-    prov.textContent = b.provenance;
-    const pre = document.createElement("pre");
-    pre.className = "mono";
-    pre.textContent = b.text.length > 1200 ? `${b.text.slice(0, 1200)}\n… (${b.text.length.toLocaleString()} chars total)` : b.text;
-    item.append(summary, prov, pre);
+    const detail = only && !only.chunk ? only.provenance : `${count} chunk${count === 1 ? "" : "s"}`;
+    summary.textContent = `${i + 1}. ${group.docName} — ${detail}`;
+    item.appendChild(summary);
+    if (only && !only.chunk) {
+      // Whole document or opening fallback — nothing to nest.
+      item.append(inspectorProv(only.provenance), inspectorText(only.text));
+    } else {
+      for (const b of group.blocks) {
+        const chunk = document.createElement("details");
+        chunk.className = "ws-insp-chunk";
+        const chunkSummary = document.createElement("summary");
+        chunkSummary.textContent = `part ${b.chunk}/${b.of}`;
+        chunk.append(chunkSummary, inspectorProv(b.provenance), inspectorText(b.text));
+        item.appendChild(chunk);
+      }
+    }
     els.inspector.appendChild(item);
   });
 }

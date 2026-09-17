@@ -7,6 +7,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 _No changes yet._
 
+## [3.2.0] — 2026-09-17
+
+### Added
+
+- **Research: context grouped by document** — retrieval results now read as documents
+  rather than as a flat list of chunks, in both the prompt and the context inspector.
+  The inspector shows one entry per selected document, expanded, with that document's
+  chunks nested inside it and collapsed, and the header reports
+  `10 documents · 30 chunks`. The prompt renders `[Document 1: name — 3 chunks]`
+  followed by `[Chunk 2/7 — top match for this document (score …)]` blocks. A
+  ten-document comparison used to list roughly thirty chunk entries that each repeated
+  the document name; this is what makes "Compare docs" read as a document-level task.
+  A document contributing a single block keeps the previous compact one-line form
+  byte-for-byte, with a regression test guarding that.
+
 ## [3.1.0] — 2026-09-17
 
 ### Added

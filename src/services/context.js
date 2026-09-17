@@ -170,6 +170,8 @@ export function buildContext({
   const totalTokens = active.reduce((sum, d) => sum + countTokens(d.text), 0);
   if (totalTokens <= budget) {
     const blocks = active.map((d) => ({
+      docId: d.id,
+      docName: d.name,
       label: d.name,
       provenance: "full document",
       text: d.text,
@@ -191,11 +193,20 @@ export function buildContext({
   const usedChunks = new Set();
   let used = 0;
 
-  const addBlock = ({ doc, chunkId = null, label, provenance, text, limit }) => {
+  const addBlock = ({ doc, chunkId = null, label, provenance, text, limit, chunk, of }) => {
     const allowance = Math.min(limit, budget - used);
     const fitted = fitText(text, allowance, countTokens);
     if (!fitted) return false;
-    groups.get(doc.id).push({ label, provenance, text: fitted });
+    // docId/docName (and chunk/of for a retrieved chunk) let the inspector and
+    // the prompt group these blocks back under the document they came from.
+    groups.get(doc.id).push({
+      docId: doc.id,
+      docName: doc.name,
+      label,
+      provenance,
+      text: fitted,
+      ...(chunk ? { chunk, of } : {}),
+    });
     used += countTokens(fitted);
     if (chunkId !== null) usedChunks.add(chunkId);
     return true;
@@ -215,6 +226,8 @@ export function buildContext({
         provenance: `top match for this document (score ${best.score.toFixed(2)})`,
         text: best.text,
         limit: share,
+        chunk: best.meta.chunk,
+        of: best.meta.of,
       }
       : {
         doc,
@@ -239,6 +252,8 @@ export function buildContext({
       provenance: `BM25 match (score ${hit.score.toFixed(2)})`,
       text: hit.text,
       limit: budget,
+      chunk: hit.meta.chunk,
+      of: hit.meta.of,
     });
   }
 
@@ -251,9 +266,55 @@ export function buildContext({
   };
 }
 
-// Render context blocks into a prompt-ready string with provenance headers.
+// Group context blocks back under the document they came from, in the order the
+// documents were first seen (i.e. selection order). Both the inspector and the
+// prompt use this so a multi-document request reads as documents rather than as
+// a flat list of chunks.
+// → [{ docId, docName, blocks }]
+export function groupBlocksByDocument(blocks) {
+  const list = [];
+  const byKey = new Map();
+  for (const block of blocks ?? []) {
+    const key = block.docId ?? block.docName ?? block.label;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { docId: block.docId ?? null, docName: block.docName ?? block.label, blocks: [] };
+      byKey.set(key, group);
+      list.push(group);
+    }
+    group.blocks.push(block);
+  }
+  return list;
+}
+
+// Render context blocks into a prompt-ready string.
+//
+// A document that contributes a single block keeps the compact one-line form
+// (`[Document 1: name — full document]`), byte-for-byte what the flat renderer
+// produced before. A document that contributes several chunks becomes a
+// document header followed by its chunks:
+//
+//   [Document 1: Alpha.pdf — 3 chunks]
+//   [Chunk 1/7 — top match for this document (score 1.23)]
+//   …
+//   [Chunk 3/7 — BM25 match (score 0.98)]
+//   …
+//
+// The document name stays on the header, so the citation instructions
+// ([DocName p.X] / [DocName]) still have a name to point at.
 export function renderContextBlocks(blocks) {
-  return blocks
-    .map((b, i) => `[Document ${i + 1}: ${b.label} — ${b.provenance}]\n${b.text}`)
+  return groupBlocksByDocument(blocks)
+    .map((group, i) => {
+      const head = `[Document ${i + 1}: ${group.docName}`;
+      const only = group.blocks.length === 1 ? group.blocks[0] : null;
+      if (only && !only.chunk) {
+        return `${head} — ${only.provenance}]\n${only.text}`;
+      }
+      const count = `${group.blocks.length} chunk${group.blocks.length === 1 ? "" : "s"}`;
+      const body = group.blocks
+        .map((b) => `[Chunk ${b.chunk}/${b.of} — ${b.provenance}]\n${b.text}`)
+        .join("\n\n");
+      return `${head} — ${count}]\n\n${body}`;
+    })
     .join("\n\n---\n\n");
 }

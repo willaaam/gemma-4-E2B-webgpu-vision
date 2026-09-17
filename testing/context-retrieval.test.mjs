@@ -7,7 +7,7 @@
 //
 // Usage: node testing/context-retrieval.test.mjs
 
-import { BM25Index, buildContext, renderContextBlocks, chunkText } from "../src/services/context.js";
+import { BM25Index, buildContext, renderContextBlocks, groupBlocksByDocument, chunkText } from "../src/services/context.js";
 
 let passed = 0;
 const failures = [];
@@ -60,6 +60,12 @@ const blocksOf = (blocks, name) => blocks.filter((b) => startOf(b.label) === nam
   eq("stuff: one block per document", ctx.blocks.length, 3);
   check("stuff: full documents", ctx.blocks.every((b) => b.provenance === "full document"));
   eq("stuff: order follows selection", docOrder(ctx.blocks).join(","), "Alpha.pdf,Bravo.pdf,Charlie.pdf");
+  check("stuff: blocks carry document identity",
+    ctx.blocks.every((b, i) => b.docId === docs[i].id && b.docName === docs[i].name));
+  // Regression guard: a document contributing one block must render exactly as
+  // the old flat renderer did. Only multi-chunk documents change shape.
+  eq("stuff: prompt keeps the compact one-line form", renderContextBlocks(ctx.blocks),
+    docs.map((d, i) => `[Document ${i + 1}: ${d.name} — full document]\n${d.text}`).join("\n\n---\n\n"));
 }
 
 // --- multi-document coverage (the regression) ---------------------------------
@@ -85,6 +91,39 @@ const blocksOf = (blocks, name) => blocks.filter((b) => startOf(b.label) === nam
   check("coverage: the fallback chunk is the document's first chunk",
     blocksOf(ctx.blocks, "Bravo.pdf")[0].provenance.includes("beginning")
     && !blocksOf(ctx.blocks, "Bravo.pdf")[0].text.includes("foraging"));
+  check("coverage: blocks carry document identity", ctx.blocks.every((b) => b.docId && b.docName));
+}
+
+// --- grouping: inspector view and prompt ---------------------------------------
+
+{
+  const ctx = buildContext({ docs, query: "wombat", contextBudget: 100, tokenCounter: tokens });
+  const groups = groupBlocksByDocument(ctx.blocks);
+  eq("groups: one per document", groups.length, 3);
+  eq("groups: order follows selection", groups.map((g) => g.docName).join(","), "Alpha.pdf,Bravo.pdf,Charlie.pdf");
+  eq("groups: chunks stay together", groups.map((g) => g.blocks.length).join(","), "3,1,1");
+  check("groups: every block belongs to its own document",
+    groups.every((g) => g.blocks.every((b) => b.docId === g.docId && b.docName === g.docName)));
+  check("groups: unknown document falls back to the label",
+    groupBlocksByDocument([{ label: "Solo.pdf", provenance: "p", text: "t" }])[0].docName === "Solo.pdf");
+
+  // The complaint this fixes: a 10-document comparison used to list ~30 chunk
+  // entries, each repeating the document name.
+  const prompt = renderContextBlocks(ctx.blocks);
+  eq("prompt: each document name appears exactly once",
+    ["Alpha.pdf", "Bravo.pdf", "Charlie.pdf"].map((n) => prompt.split(n).length - 1).join(","), "1,1,1");
+  check("prompt: the document header counts its chunks",
+    prompt.includes("[Document 1: Alpha.pdf — 3 chunks]"), prompt.slice(0, 90));
+  check("prompt: chunks are numbered against their document",
+    /\[Chunk \d+\/3 — top match for this document \(score [\d.]+\)\]/.test(prompt)
+    && /\[Chunk \d+\/3 — BM25 match \(score [\d.]+\)\]/.test(prompt),
+    prompt.slice(0, 200));
+  check("prompt: documents are still separated by the usual rule",
+    prompt.includes("\n\n---\n\n[Document 2: Bravo.pdf"));
+  check("prompt: a single-block document keeps the compact header",
+    prompt.includes("[Document 2: Bravo.pdf — beginning (no keyword match)]"), prompt.slice(-200));
+  check("prompt: no document name is repeated inside its own chunk headers",
+    !prompt.includes("[Chunk 1/3 — ") || !prompt.includes("Alpha.pdf — BM25"));
 }
 
 // --- leftover budget goes to the best remaining chunks -------------------------
