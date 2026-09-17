@@ -5,6 +5,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [3.2.2] — 2026-09-17
+
 ### Fixed
 
 - **Reports: charts went unrendered when the fence was not tagged `chart`** — extraction
@@ -19,6 +23,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   work and then saved nothing. Extraction and replacement now share one matcher
   (`replaceChartBodies`) so the two cannot disagree. `npm run test:reports` covers all of
   this — 50 assertions, including the reported spec verbatim.
+- **Reports: the outline stage could fail and block the whole app** — the planner prompt
+  contains a format example, and with Thinking on the model echoes it while reasoning. That
+  example is *itself* valid JSON, so the greedy bracket match over the whole reply mixed the
+  example with the real answer, failed to parse, and then spent the single retry the same
+  way — “Could not get a valid outline.” before a single section was written. The parser
+  (now `apps/reports/outline.js`, so it is unit-testable) tries a fenced block first, then
+  every bracket span from the right, accepting only an array of two or more objects that
+  each carry a `title`. That finds the real answer ahead of the echoed example and rejects
+  that one-item example outright. The planner budget also went 1600 → 2400 tokens: with
+  Thinking on the reasoning is emitted first, and a long one could consume the entire budget
+  so the answer never arrived — indistinguishable from the outside. The cap does not force
+  more output.
 
 ## [3.2.1] — 2026-09-17
 

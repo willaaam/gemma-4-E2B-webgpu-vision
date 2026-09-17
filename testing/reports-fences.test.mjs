@@ -18,6 +18,7 @@
 // Usage: node testing/reports-fences.test.mjs
 
 import { stripWrapperFence, extractCharts, parseChartSpec, replaceChartBodies } from "../apps/reports/chart-renderer.js";
+import { parseOutline } from "../apps/reports/outline.js";
 
 let passed = 0;
 const failures = [];
@@ -208,6 +209,52 @@ for (const tag of ["", "json", "chart"]) {
   const { charts } = extractCharts(md);
   eq("replace: count mismatch is refused", replaceChartBodies(md, charts.slice(1)), md);
 }
+
+// --- parseOutline: the stage that gates the whole Reports app ----------------
+//
+// Reported as "completely broken: Outline wasn't valid JSON … Could not get a valid
+// outline." The planner prompt contains a format example, and with Thinking on the model
+// echoes it inside its reasoning. That example is itself valid JSON, so a greedy
+// bracket match over the whole reply mixed the example with the real answer and failed.
+const OUTLINE = [
+  { title: "Executive Summary", purpose: "High-level overview." },
+  { title: "Findings", purpose: "What the data shows." },
+  { title: "Recommendations", purpose: "What to do next." },
+];
+const OUTLINE_JSON = JSON.stringify(OUTLINE);
+
+eq("outline: plain array", parseOutline(OUTLINE_JSON)?.length, 3);
+eq("outline: fenced json array", parseOutline("Here you go:\n```json\n" + OUTLINE_JSON + "\n```")?.length, 3);
+eq("outline: bare fence", parseOutline("```\n" + OUTLINE_JSON + "\n```")?.length, 3);
+eq("outline: prose around it", parseOutline("Sure! " + OUTLINE_JSON + "\nHope that helps.")?.length, 3);
+
+// The reported case: reasoning echoes the prompt's one-item example before the real answer.
+const reasoning = [
+  "Thinking Process:",
+  "1. The user wants a report plan.",
+  '   The format is [{"title":"Section title","purpose":"one sentence"}].',
+  "2. 4-7 sections, first is a summary.",
+  "3. Let me draft it.",
+  "",
+  "Answer:",
+].join("\n");
+{
+  const contaminated = reasoning + "\n" + OUTLINE_JSON;
+  const got = parseOutline(contaminated);
+  eq("outline: reasoning echo does not win", got?.length, 3);
+  eq("outline: the real first title is used", got?.[0]?.title, "Executive Summary");
+}
+// The same contamination plus prose and a second bracketed aside after the answer.
+{
+  const contaminated = reasoning + "\n" + OUTLINE_JSON + "\n\n(Note: [step 1] is done.)";
+  eq("outline: a trailing bracketed aside is ignored", parseOutline(contaminated)?.length, 3);
+}
+// The echoed one-item example on its own is not a plan.
+eq("outline: one-item example alone is rejected", parseOutline('[{"title":"Section title","purpose":"one sentence"}]'), null);
+eq("outline: objects without a title are rejected", parseOutline('[{"a":1},{"b":2}]'), null);
+eq("outline: garbage is rejected", parseOutline("I could not plan this report."), null);
+eq("outline: empty input", parseOutline(""), null);
+eq("outline: a JSON object (not array) is rejected", parseOutline('{"title":"x"}'), null);
 
 // --- report ------------------------------------------------------------------
 

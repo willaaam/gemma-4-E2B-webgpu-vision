@@ -12,6 +12,7 @@ import { thinkMessages } from "../../src/services/settings.js";
 import { selectedContextLimit } from "../../src/services/context-preference.js";
 import { renderMarkdown, escapeHtml } from "../../src/lib/markdown.js";
 import { extractCharts, renderChartsIn, parseChartSpec, renderLightPng, stripWrapperFence, replaceChartBodies } from "./chart-renderer.js";
+import { parseOutline } from "./outline.js";
 
 const TEMPLATES = {
   status: {
@@ -222,16 +223,19 @@ async function generate() {
       `Report topic: ${topic}`,
       "Plan 4–7 sections. The first must be an executive summary; the last must be conclusions/recommendations." + (dataBlock ? "" : ""),
     ].join("\n");
-    const outlineRes = await completeSimple([{ role: "user", content: outlinePrompt }], signal, 1600);
-    let outline = tryParseJsonArray(outlineRes);
+    // 2400, not 1600: with Thinking on, the reasoning block is emitted first, and a chatty
+    // one could consume the whole budget so the answer never arrived — which surfaced as an
+    // unparseable outline and then an unparseable retry. The cap does not force more output.
+    const outlineRes = await completeSimple([{ role: "user", content: outlinePrompt }], signal, 2400);
+    let outline = parseOutline(outlineRes);
     if (!outline) {
       log("Outline wasn't valid JSON — retrying once…");
       const retry = await completeSimple([
         { role: "user", content: outlinePrompt },
         { role: "assistant", content: outlineRes },
         { role: "user", content: "That was not a valid JSON array. Reply again with ONLY the JSON array." },
-      ], signal, 1600);
-      outline = tryParseJsonArray(retry);
+      ], signal, 2400);
+      outline = parseOutline(retry);
     }
     if (!outline || !outline.length) throw new Error("Could not get a valid outline.");
     log(`Outline: ${outline.length} sections.`);
@@ -298,15 +302,6 @@ async function completeSimple(messages, signal, maxNewTokens) {
     skipLock: true, // generate() already holds the lock
   });
   return (res.answerText || res.reply || "").trim();
-}
-
-function tryParseJsonArray(text) {
-  const m = String(text ?? "").match(/\[[\s\S]*\]/);
-  if (!m) return null;
-  try {
-    const arr = JSON.parse(m[0]);
-    return Array.isArray(arr) && arr.every((x) => x && typeof x === "object") ? arr : null;
-  } catch { return null; }
 }
 
 function escapeMd(s) { return String(s ?? "").replace(/#/g, "\\#"); }

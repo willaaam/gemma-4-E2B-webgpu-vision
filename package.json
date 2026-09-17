@@ -1,6 +1,6 @@
 {
   "name": "gemma-4-webgpu-kernels",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "Gemma 4 E2B (QAT Mobile) fully in the browser with WebGPU — text + vision, 100% on-device. Fork of the webml-community Space with an NVIDIA/Windows subgroup fix and a custom WebGPU vision tower.",
   "type": "module",
   "private": true,
@@ -18,7 +18,7 @@
     "test:portable": "node testing/asset-fetch.test.mjs",
     "test:context": "node testing/context-retrieval.test.mjs && node testing/context-preference.test.mjs",
     "test:reports": "node testing/reports-fences.test.mjs",
-    "check": "node --check tools/serve.mjs && node --check tools/vendor-python-packages.mjs && node --check tools/vendor-portable-assets.mjs && node --check tools/vendor-model-sidecars.mjs && node --check tools/build-portable.mjs && node --check tools/build-release.mjs && node --check tools/changelog-section.mjs && node --check tools/check-release.mjs && node --check src/lib/asset-store.js && node --check src/lib/asset-fetch.js && node --check src/lib/portable.js && node --check src/services/context.js && node --check src/services/context-preference.js && node --check src/shell/portable-entry.js && node --check src/shell/router.js && node --check apps/code/app.js && node --check apps/code/components/explorer.js && node --check apps/code/components/editor-cm.js && node --check apps/code/runners/web-runner.js && node --check apps/code/runners/pyodide-runner.js && node --check apps/code/runners/python-packages.js && node --check apps/research/app.js && node --check apps/reports/app.js && node --check apps/reports/chart-renderer.js && node --check sw.js && echo 'tools OK'",
+    "check": "node --check tools/serve.mjs && node --check tools/vendor-python-packages.mjs && node --check tools/vendor-portable-assets.mjs && node --check tools/vendor-model-sidecars.mjs && node --check tools/build-portable.mjs && node --check tools/build-release.mjs && node --check tools/changelog-section.mjs && node --check tools/check-release.mjs && node --check src/lib/asset-store.js && node --check src/lib/asset-fetch.js && node --check src/lib/portable.js && node --check src/services/context.js && node --check src/services/context-preference.js && node --check src/shell/portable-entry.js && node --check src/shell/router.js && node --check apps/code/app.js && node --check apps/code/components/explorer.js && node --check apps/code/components/editor-cm.js && node --check apps/code/runners/web-runner.js && node --check apps/code/runners/pyodide-runner.js && node --check apps/code/runners/python-packages.js && node --check apps/research/app.js && node --check apps/reports/app.js && node --check apps/reports/chart-renderer.js && node --check apps/reports/outline.js && node --check sw.js && echo 'tools OK'",
     "test": "npm run check && npm run test:portable && npm run test:context && npm run test:reports && npm run check:release"
   },
   "engines": {
