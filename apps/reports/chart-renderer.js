@@ -55,6 +55,27 @@ export function parseChartSpec(jsonText) {
   };
 }
 
+/**
+ * Strip an accidental whole-section wrapper fence, without disturbing fences that belong
+ * to blocks inside the section.
+ *
+ * Reports are generated one section per completion, and the model sometimes wraps the
+ * whole answer in ``` … ```. Removing the first and last fence line *independently* is not
+ * safe: a section that ends with a ```chart block also ends in ```, so stripping it leaves
+ * the chart unterminated. The JSON then runs on past the end of the section — invalid on
+ * its own, and worse, it swallows everything up to the next fence in the document, so the
+ * following section disappears into the chart spec. Unwrap only when the section is
+ * genuinely wrapped: when BOTH the first and last lines are bare fences.
+ */
+export function stripWrapperFence(text) {
+  const body = String(text ?? "").trim();
+  const lines = body.split("\n");
+  if (lines.length < 2) return body;
+  const isBareFence = (line) => /^```(?:markdown|md)?\s*$/.test(line.trim());
+  if (!isBareFence(lines[0]) || !isBareFence(lines[lines.length - 1])) return body;
+  return lines.slice(1, -1).join("\n").trim();
+}
+
 // Extract ```chart fenced blocks from markdown and replace them with placeholder
 // divs that renderChartInto can fill. Returns { html, charts: [{id, jsonText}] }.
 export function extractCharts(markdown) {

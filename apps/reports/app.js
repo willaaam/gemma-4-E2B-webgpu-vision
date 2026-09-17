@@ -11,7 +11,7 @@ import { db, newId } from "../../src/services/db.js";
 import { thinkMessages } from "../../src/services/settings.js";
 import { selectedContextLimit } from "../../src/services/context-preference.js";
 import { renderMarkdown, escapeHtml } from "../../src/lib/markdown.js";
-import { extractCharts, renderChartsIn, parseChartSpec, renderLightPng } from "./chart-renderer.js";
+import { extractCharts, renderChartsIn, parseChartSpec, renderLightPng, stripWrapperFence } from "./chart-renderer.js";
 
 const TEMPLATES = {
   status: {
@@ -259,7 +259,7 @@ async function generate() {
         signal,
         2400
       );
-      md += `\n\n${cleanSection(res)}\n`;
+      md += `\n\n${stripWrapperFence(res)}\n`;
       renderPreview(md); // live update as sections land
     }
 
@@ -307,11 +307,6 @@ function tryParseJsonArray(text) {
     const arr = JSON.parse(m[0]);
     return Array.isArray(arr) && arr.every((x) => x && typeof x === "object") ? arr : null;
   } catch { return null; }
-}
-
-function cleanSection(text) {
-  // strip accidental top-level fences around the whole section
-  return String(text ?? "").replace(/^```(?:markdown|md)?\r?\n/, "").replace(/```\s*$/, "").trim();
 }
 
 function escapeMd(s) { return String(s ?? "").replace(/#/g, "\\#"); }

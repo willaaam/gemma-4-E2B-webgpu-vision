@@ -5,7 +5,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- **Reports: a chart at the end of a section broke that section** — sections are generated
+  one completion at a time, and the model sometimes wraps a whole section in a ``` fence, so
+  each section was "unwrapped" by stripping the first fence and the last fence
+  *independently*. But a section that ends with a ```chart block also ends in ```, so the
+  chart's closing fence was deleted: the block never terminated, its JSON ran on past the end
+  of the section, and — since `extractCharts` needs a closing fence — either the chart
+  silently vanished and the raw JSON showed up as text, or the block matched all the way to
+  the next fence and swallowed the following section into the chart spec. Unwrapping now
+  happens only when both the first and last lines are bare fences, and
+  `npm run test:reports` covers the trailing-chart, trailing-code-block, genuinely-wrapped
+  and wrapped-plus-chart cases — including the previous failure mode, so the naive strip
+  cannot come back as a "simplification". `apps/reports/` is now syntax-checked like the
+  other apps.
 
 ## [3.2.0] — 2026-09-17
 
