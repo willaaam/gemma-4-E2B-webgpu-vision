@@ -1,0 +1,37 @@
+name: CI
+
+# Fast checks only — no vendoring, no packaging. `npm test` needs nothing beyond a
+# checkout plus `npm ci`, because the Pyodide core and the parser bundles are tracked
+# (only the 148 MB scientific stack is gitignored, and nothing here requires it).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test

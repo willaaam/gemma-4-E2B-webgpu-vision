@@ -1653,7 +1653,7 @@
         <a href="#/reports" data-route="reports">Reports</a>
       </nav>
       <div class="ws-top-actions">
-        <span class="ws-context-control mono" title="Context window cap — shared across Chat, Research, Code & Reports (Auto = device maximum)">
+        <span class="ws-context-control mono" title="Context window cap — shared across Chat, Research, Code & Reports (defaults to 32K; Auto = device maximum)">
           Context
           <select id="globalContextLimit" aria-label="Global context limit">
             <option value="auto">Auto</option>
@@ -1692,9 +1692,9 @@
     <div id="contextInfoPopover" class="ws-info-popover" hidden role="dialog" aria-label="What is context?">
       <button class="ws-info-close" type="button" aria-label="Close">×</button>
       <h4>Context window</h4>
-      <p>How much text the model can “see” at once — your prompt, chat history, and attached files all count toward it.</p>
-      <p><span class="mono">Auto</span> uses your device’s maximum (up to 128K tokens). Pick a smaller cap to save memory or keep replies faster on lower-end devices.</p>
-      <p class="mono">1 token ≈ ¾ of a word. 8K ≈ a few pages, 128K ≈ a small book.</p>
+      <p>How much text the model “sees” at once — your prompt, chat history, and attached files all count toward it.</p>
+      <p><span class="mono">32K</span> is the default: room for several documents while keeping memory use and prefill time down. <span class="mono">Auto</span> uses your device’s maximum (up to 128K tokens); other caps trade memory and speed differently.</p>
+      <p class="mono">1 token ≈ ¾ of a word. 8K ≈ a few pages, 32K ≈ a short report, 128K ≈ a small book.</p>
     </div>
     <div id="temperatureInfoPopover" class="ws-info-popover" hidden role="dialog" aria-label="What is temperature?">
       <button class="ws-info-close" type="button" aria-label="Close">×</button>

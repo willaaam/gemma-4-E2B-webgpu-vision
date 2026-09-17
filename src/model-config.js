@@ -17,23 +17,51 @@
 //     ./models/google/gemma-4-E2B-it-qat-mobile-transformers/ and open the page
 //     with ?localweights=1. Serve the folder with `node tools/serve.mjs` so
 //     Range requests are honored.
+//
+//   Portable build (one HTML + an assets folder, opened from disk):
+//     The weights come from the picked assets folder instead, resolved through the
+//     virtual asset origin. There is no network to fall back to, so local weights
+//     are used unconditionally and `?localweights=1` is unnecessary.
+
+import { isPortable, rootUrl, weightsSource, WEIGHTS_HF } from "./lib/portable.js";
 
 const HF_BASE =
   "https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers/resolve/main/";
 
-// Local weights resolve relative to this module (./src) up to the repo root.
-const LOCAL_BASE = new URL(
-  "../models/google/gemma-4-E2B-it-qat-mobile-transformers/",
-  import.meta.url
-).href;
+const MODEL_SUBDIR = "models/google/gemma-4-E2B-it-qat-mobile-transformers/";
 
-const useLocalWeights =
+// Local weights resolve relative to this module (./src) up to the repo root.
+const REPO_LOCAL_BASE = new URL(`../${MODEL_SUBDIR}`, import.meta.url).href;
+
+const hasLocalWeightsParam = () =>
   typeof globalThis.location !== "undefined" &&
   new URLSearchParams(globalThis.location.search).has("localweights");
+
+/**
+ * Where the weights come from, re-resolved on every access.
+ *
+ * This has to be dynamic rather than a module-scope constant: the portable build asks
+ * the user *after* the modules have evaluated whether to read `model.safetensors` from
+ * a folder they picked (fully offline) or to stream it from the Hugging Face Hub. A
+ * constant would freeze the answer to the pre-decision default.
+ */
+export function weightsBaseUrl() {
+  if (isPortable() && weightsSource() === WEIGHTS_HF) return HF_BASE;
+  if (isPortable() || hasLocalWeightsParam()) {
+    return rootUrl(MODEL_SUBDIR) ?? REPO_LOCAL_BASE;
+  }
+  return HF_BASE;
+}
+
+/** True when the weights are read from disk rather than fetched from the Hub. */
+export function weightsAreLocal() {
+  return weightsBaseUrl() !== HF_BASE;
+}
 
 export const MODEL_CONFIG = Object.freeze({
   mobileGemma: Object.freeze({
     id: "google/gemma-4-E2B-it-qat-mobile-transformers",
-    path: useLocalWeights ? LOCAL_BASE : HF_BASE,
+    // A getter, so callers see the current choice instead of the value at import time.
+    get path() { return weightsBaseUrl(); },
   }),
 });

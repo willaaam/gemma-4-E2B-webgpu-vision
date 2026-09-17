@@ -1,7 +1,12 @@
 // Load the generated engine and fail early if the checked-in artifact is stale.
 
+import { getEngineSource } from "../lib/portable.js";
+
 const ENGINE_URL = new URL("../../gemma-4-e2b.js", import.meta.url);
-const source = await (await fetch(ENGINE_URL)).text();
+
+// The portable build inlines the engine source, because a `file://` page cannot
+// fetch a sibling module. Everywhere else we fetch it relative to this module.
+const source = getEngineSource() ?? await (await fetch(ENGINE_URL)).text();
 if (!source.includes("getContextCapabilities") || !source.includes("countPromptTokens")) {
   throw new Error("Unsupported Gemma engine bundle: runtime capability API is missing");
 }

@@ -88,6 +88,7 @@ export const researchApp = {
           <div class="ws-actions-row" data-role="actions"></div>
           <footer class="ws-composer">
             <textarea data-role="input" rows="1" placeholder="Load the model to ask about your documents…" disabled></textarea>
+            <button class="ws-btn ghost" data-role="clear" type="button" title="Clear the conversation — documents stay in the library">Clear</button>
             <button class="ws-btn primary" data-role="send" disabled>Ask</button>
             <button class="ws-btn danger" data-role="stop" hidden>Stop</button>
           </footer>
@@ -113,12 +114,16 @@ export const researchApp = {
       input: wrap.querySelector('[data-role="input"]'),
       sendBtn: wrap.querySelector('[data-role="send"]'),
       stopBtn: wrap.querySelector('[data-role="stop"]'),
+      clearBtn: wrap.querySelector('[data-role="clear"]'),
       inspector: wrap.querySelector('[data-role="inspector"]'),
     });
     wrap.querySelector('[data-act="add"]').addEventListener("click", () => els.fileInput.click());
     els.fileInput.addEventListener("change", onFilesPicked);
     els.sendBtn.addEventListener("click", () => ask(els.input.value.trim()));
     els.stopBtn.addEventListener("click", () => abortController?.abort());
+    // Always available: reset aborts any in-flight answer, clears the thread,
+    // the chat history and the inspector, and keeps the document library.
+    els.clearBtn.addEventListener("click", () => resetResearchConversation());
     els.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendBtn.disabled) ask(els.input.value.trim()); }
     });

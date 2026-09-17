@@ -5,8 +5,49 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [3.1.0] — 2026-09-17
+
 ### Added
 
+- **Automated releases** — `.github/workflows/release.yml` builds and attaches the portable
+  release on a `v*` tag (or a manual run, which drafts by default): it rejects a tag that
+  disagrees with `package.json`, caches and vendors the offline runtime, fetches the model
+  sidecars, runs the suite, packages both artifacts and takes the release notes from this
+  changelog via `npm run changelog <version>`. Re-running updates the existing release with
+  `--clobber` instead of failing. A companion `ci.yml` runs `npm ci && npm test` on pushes
+  and PRs. Supporting changes: `npm run vendor:model` downloads the tokenizer and configs
+  (`models/**` is gitignored, so a fresh clone and CI have none — `build:release` now fails
+  loudly rather than shipping an artifact that cannot work offline), `build:release` also
+  publishes the bare single-file HTML with a checksum for both artifacts and exits non-zero
+  if an asset would exceed GitHub's 2 GiB per-file limit, `package-lock.json` is no longer
+  in `.gitignore` (`npm ci` needs it tracked), and Node is pinned via `engines`.
+- **Portable single-file release** — `npm run build:portable` produces one
+  `gemma4-workstation.html` (~3 MB: every module, stylesheet and font inlined) that runs
+  the entire workstation from disk with **no server and no installation**. Since a
+  `file://` page cannot fetch its neighbours and has no HTTP `Range`, the app asks for
+  its `assets` folder once and then streams the weights by slicing the picked `File`
+  (`Blob.slice`) behind a shimmed `fetch` that speaks `Range` — the engine's existing
+  `options.fetch` / `knownSize` / `knownAcceptsRanges` seam means **no kernel changes**.
+  The same shim serves the vendored Pyodide runtime, its standard library and every
+  micropip wheel from disk, and `pyodide.asm.js` is pre-imported from a `blob:` URL so
+  Pyodide skips the dynamic `import()` a patched `fetch` cannot intercept. New
+  `npm run vendor:portable` (13 MB core; `--with-scientific` adds the 148 MB DS stack),
+  `npm run build:portable[:min]` and `npm run test:portable` (37 byte-exact Range
+  assertions). `tools/check-release.mjs` now also fails on a missing or stale vendored
+  runtime, and the build refuses to emit a bundle containing a runtime `fetch`/`import`
+  of a remote URL. See [PORTABLE.md](PORTABLE.md).
+- **Portable release can run without the checkpoint** — the start screen now offers
+  *Stream from Hugging Face* alongside the offline assets folder, and the weight source is
+  resolved per load instead of being fixed at import time (`weightsBaseUrl()` /
+  `weightsAreLocal()` in `src/model-config.js`, `weightsSource()` in `src/lib/portable.js`).
+  That is what makes a small download possible: `npm run build:release` packages a **67 MB**
+  zip (app + full offline runtime, no weights) with `SHA256SUMS.txt`, checking it against
+  GitHub's 2 GiB per-asset limit. The checkpoint cannot legally ride along — it is 2.29 GiB
+  raw and still 2.02 GiB deflated, since the QAT int8 tensors are ~90 % incompressible and
+  LZMA does no better than deflate — so it streams on demand instead. Verified end-to-end
+  against the real Hub: 34 requests, 2.23 GB cached, working generation, no page errors.
 - **Code: Run selection for Python** — highlighting code in a `.py` file shows a
   `▶ Run selection` button next to `▶ Run Python`. It runs just the highlighted
   code, exactly as written — the file itself is not executed. Output is appended
@@ -18,6 +59,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   cleared (e.g. "cleared 2 variables and 1 module"). Installed packages stay
   cached — the next `import` simply re-executes them fresh. The web console is
   unaffected.
+- **Research: Clear button** — the document chat now has a `Clear` button beside
+  `Ask`. It clears the conversation, the thread and the context inspector, and
+  aborts an answer that is still streaming; the document library and your
+  selection stay untouched.
+- **Research: per-document BM25 retrieval** — when the selection is too large to
+  inline, retrieval now runs once per selected document *before* the remaining
+  budget is spent on the globally highest-scoring chunks, so every selected
+  document contributes context. Blocks stay grouped per document in the context
+  inspector, which is what makes "Compare docs" answerable, and a document with
+  no keyword match contributes its opening text instead of dropping out.
 
 ### Fixed
 
@@ -34,6 +85,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows its live effect). Editing a Python file no longer shows a Preview tab
   that does nothing, and opening an HTML file renders it straight away so the
   pane is never blank.
+- **Research: BM25 retrieval could ignore every document but one** — chunk
+  ranking was global, so a single long or term-dense document could fill the
+  whole budget and leave the other selected documents with no context at all.
+  Retrieval now guarantees a block per selected document, then fills the rest by
+  score (see *per-document BM25 retrieval* above).
+
+### Changed
+
+- **The context window now defaults to 32K** — the shared top-bar `Context`
+  selector starts at 32K instead of `Auto` (the full 128K architecture), so a
+  fresh profile spends less memory on the KV cache and prefills faster, and
+  loading the model allocates 32K up front. A one-time migration (flag
+  `ws-context-limit-default-32k`) moves existing profiles to the same default,
+  after which your own selection — `Auto`, 8K, 16K, 64K or 128K — is remembered
+  across reloads.
 
 ## [3.0.0] — 2026-09-13
 

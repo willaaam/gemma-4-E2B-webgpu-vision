@@ -16,12 +16,14 @@
 // The browser-side checks live in the README's "Browser console checklist";
 // this script covers everything that can be verified statically.
 
-import { readFile, access } from "node:fs/promises";
+import { readFile, access, stat } from "node:fs/promises";
 import { dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SEEDS = ["index.html", "landing.js", "sw.js"];
+// `src/shell/portable-entry.js` is not referenced by index.html — the portable build
+// injects it as a prelude — but it must still resolve, so it is checked as a seed.
+const SEEDS = ["index.html", "landing.js", "sw.js", "src/shell/portable-entry.js"];
 const problems = [];
 const notes = [];
 
@@ -129,6 +131,56 @@ for (const abs of visited) {
   }
 }
 notes.push(`module graph: ${visited.size} modules reachable from ${SEEDS.join(", ")}`);
+
+// --- 5. portable runtime assets --------------------------------------------
+// The single-file portable build reads these from the assets folder next to the
+// HTML. They are large binaries, so a missing or stale one is easy to ship by
+// accident — and impossible to notice until the app is already on the target machine.
+
+const PORTABLE_REQUIRED = [
+  "vendor/pyodide/pyodide.js",
+  "vendor/pyodide/pyodide.asm.js",
+  "vendor/pyodide/pyodide.asm.wasm",
+  "vendor/pyodide/python_stdlib.zip",
+  "vendor/pyodide/pyodide-lock.json",
+  "vendor/parser/pdf.min.js",
+  "vendor/parser/pdf.worker.min.js",
+  "vendor/parser/mammoth.browser.min.js",
+];
+
+const PORTABLE_MANIFEST = resolve(ROOT, "vendor/portable-manifest.json");
+if (await exists(PORTABLE_MANIFEST)) {
+  const pm = JSON.parse(await readFile(PORTABLE_MANIFEST, "utf8"));
+  let present = 0;
+  let bytes = 0;
+  for (const rel of PORTABLE_REQUIRED) {
+    const abs = resolve(ROOT, rel);
+    if (!(await exists(abs))) {
+      problems.push(`portable asset missing: ${rel} (run: npm run vendor:portable)`);
+      continue;
+    }
+    present++;
+    bytes += (await stat(abs)).size;
+  }
+
+  // The vendored runtime must match the version the runner actually requests,
+  // otherwise the portable build silently falls back to the CDN — i.e. it stops
+  // working offline exactly when it matters.
+  const runnerSrc = await readFile(resolve(ROOT, "apps/code/runners/pyodide-runner.js"), "utf8");
+  const wanted = /PYODIDE_VERSION\s*=\s*["']([^"']+)["']/.exec(runnerSrc)?.[1];
+  if (wanted && pm.pyodide?.version && wanted !== pm.pyodide.version) {
+    problems.push(
+      `vendored Pyodide ${pm.pyodide.version} ≠ PYODIDE_VERSION ${wanted} — run: npm run vendor:portable --force`
+    );
+  }
+
+  notes.push(
+    `portable runtime: Pyodide ${pm.pyodide?.version ?? "?"}, ${present}/${PORTABLE_REQUIRED.length} files on disk, ` +
+    `${pm.pyodide?.packages?.length ?? 0} binary packages, ${(bytes / 1048576).toFixed(1)} MB`
+  );
+} else {
+  notes.push("portable runtime: not vendored (portable builds will need the CDN; run npm run vendor:portable)");
+}
 
 // --- report ----------------------------------------------------------------
 

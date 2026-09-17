@@ -5,7 +5,9 @@
 // fallback before a tokenizer is available.
 // Strategy: estimate tokens (≈ chars/4); if the selected corpus fits the
 // stuffing budget, inline everything; otherwise fall back to BM25 retrieval
-// over pre-chunked documents. Pure JS, no dependencies, no embedding model.
+// over pre-chunked documents. Retrieval runs per document first, so comparing
+// several documents always sees content from each of them. Pure JS, no
+// dependencies, no embedding model.
 
 export const TOKENS_PER_CHAR = 0.25; // ≈ 4 chars per token for English prose
 
@@ -107,7 +109,10 @@ export class BM25Index {
 
   get size() { return this.docs.length; }
 
-  search(query, k = 8) {
+  // k = how many hits to return; docId restricts ranking to a single document
+  // (per-document retrieval). `id` is the chunk's index, so callers can tell
+  // which chunks are already in the context.
+  search(query, k = 8, { docId } = {}) {
     if (this.docs.length === 0) return [];
     const N = this.docs.length;
     const k1 = 1.5, b = 0.75;
@@ -125,9 +130,13 @@ export class BM25Index {
       }
     }
     const ranked = [];
-    for (let i = 0; i < N; i++) if (scores[i] > 0) ranked.push({ index: i, score: scores[i] });
+    for (let i = 0; i < N; i++) {
+      if (scores[i] <= 0) continue;
+      if (docId !== undefined && this.docs[i].meta?.docId !== docId) continue;
+      ranked.push({ index: i, score: scores[i] });
+    }
     ranked.sort((a, z) => z.score - a.score);
-    return ranked.slice(0, k).map(({ index, score }) => ({ ...this.docs[index], score }));
+    return ranked.slice(0, k).map(({ index, score }) => ({ ...this.docs[index], score, id: index }));
   }
 }
 
@@ -136,6 +145,13 @@ export class BM25Index {
 // buildContext({ docs, query }) → { mode: "stuff"|"bm25"|"none", blocks, estTokensUsed }
 //   docs: [{ id, name, pages?, text, chunks? }] — already parsed documents
 //   query: current user question (used only in bm25 mode)
+//
+// In bm25 mode every selected document contributes at least one block: the
+// first pass retrieves the best chunk of each document individually, and only
+// then is the remaining budget spent on the globally highest-scoring chunks.
+// Blocks stay grouped per document, in selection order, so the inspector reads
+// as a comparison. Without the per-document pass a single long or term-dense
+// document can fill the whole budget and the others contribute nothing.
 
 export function buildContext({
   docs,
@@ -161,40 +177,78 @@ export function buildContext({
     return { mode: "stuff", blocks, estTokensUsed: totalTokens };
   }
 
-  // BM25 fallback over chunks.
+  // BM25 fallback over chunks, retrieved per document.
   const index = new BM25Index();
+  const docChunks = new Map();
   for (const d of active) {
     const chunks = d.chunks?.length ? d.chunks : chunkText(d.text);
+    docChunks.set(d.id, chunks);
     chunks.forEach((c, i) => index.add(c, { docId: d.id, docName: d.name, chunk: i + 1, of: chunks.length }));
   }
-  const hits = index.search(query, 10);
-  if (hits.length === 0) {
-    // Query matched nothing — degrade gracefully to the head of each document.
-    const blocks = [];
-    let used = 0;
-    for (const d of active.slice(0, 4)) {
-      const text = fitText(d.text.slice(0, 6000), budget - used, countTokens);
-      if (!text) continue;
-      blocks.push({ label: d.name, provenance: "beginning (no keyword match)", text });
-      used += countTokens(text);
-      if (used >= budget) break;
-    }
-    return { mode: "bm25", blocks, estTokensUsed: used, budgetTokens: budget, truncated: used < active.reduce((s, d) => s + countTokens(d.text), 0) };
-  }
-  const blocks = [];
+  const perDoc = new Map(active.map((d) => [d.id, index.search(query, 10, { docId: d.id })]));
+
+  const groups = new Map(active.map((d) => [d.id, []]));
+  const usedChunks = new Set();
   let used = 0;
-  for (const h of hits) {
-    const text = fitText(h.text, budget - used, countTokens);
-    if (!text) break;
-    blocks.push({
-      label: `${h.meta.docName} · part ${h.meta.chunk}/${h.meta.of}`,
-      provenance: `BM25 match (score ${h.score.toFixed(2)})`,
-      text,
-    });
-    used += countTokens(text);
-    if (used >= budget) break;
+
+  const addBlock = ({ doc, chunkId = null, label, provenance, text, limit }) => {
+    const allowance = Math.min(limit, budget - used);
+    const fitted = fitText(text, allowance, countTokens);
+    if (!fitted) return false;
+    groups.get(doc.id).push({ label, provenance, text: fitted });
+    used += countTokens(fitted);
+    if (chunkId !== null) usedChunks.add(chunkId);
+    return true;
+  };
+
+  // Pass 1 — one block per selected document, each capped at an equal share so
+  // no single document can starve the others. A document with no keyword match
+  // still contributes its opening text, which keeps it comparable.
+  const share = Math.max(1, Math.floor(budget / active.length));
+  for (const doc of active) {
+    const best = perDoc.get(doc.id)[0];
+    addBlock(best
+      ? {
+        doc,
+        chunkId: best.id,
+        label: `${doc.name} · part ${best.meta.chunk}/${best.meta.of}`,
+        provenance: `top match for this document (score ${best.score.toFixed(2)})`,
+        text: best.text,
+        limit: share,
+      }
+      : {
+        doc,
+        label: doc.name,
+        provenance: "beginning (no keyword match)",
+        text: docChunks.get(doc.id)[0] ?? doc.text.slice(0, 6000),
+        limit: share,
+      });
   }
-  return { mode: "bm25", blocks, estTokensUsed: used, budgetTokens: budget, truncated: blocks.length < hits.length || used >= budget };
+
+  // Pass 2 — spend whatever is left on the best chunks not already included.
+  const pool = index.search(query, Math.max(10, active.length * 8));
+  for (const hit of pool) {
+    if (used >= budget) break;
+    if (usedChunks.has(hit.id)) continue;
+    const doc = active.find((d) => d.id === hit.meta.docId);
+    if (!doc) continue;
+    addBlock({
+      doc,
+      chunkId: hit.id,
+      label: `${hit.meta.docName} · part ${hit.meta.chunk}/${hit.meta.of}`,
+      provenance: `BM25 match (score ${hit.score.toFixed(2)})`,
+      text: hit.text,
+      limit: budget,
+    });
+  }
+
+  return {
+    mode: "bm25",
+    blocks: active.flatMap((d) => groups.get(d.id) ?? []),
+    estTokensUsed: used,
+    budgetTokens: budget,
+    truncated: usedChunks.size < index.size,
+  };
 }
 
 // Render context blocks into a prompt-ready string with provenance headers.

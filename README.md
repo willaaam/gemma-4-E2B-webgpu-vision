@@ -31,7 +31,7 @@ kernel:
 |---|---|
 | **Model** | [`google/gemma-4-E2B-it-qat-mobile-transformers`](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers) |
 | **Effective size** | ~2.3B params (QAT mobile, w8a8o8) |
-| **Context** | Supports up to 128K architectural context, subject to device and runtime memory limits. |
+| **Context** | Supports up to 128K architectural context, subject to device and runtime memory limits. The top-bar selector defaults to a 32K cap. |
 | **Runtime** | WebGPU compute — custom WGSL kernels |
 | **Multimodal** | Text **+** images, fully on-device |
 | **Privacy** | Prompts never leave your machine |
@@ -55,7 +55,7 @@ One model load powers four apps (hash-routed views in a single page):
 | App | What it does |
 |---|---|
 | **Chat** | Streaming chat + vision, with conversation history (IndexedDB), export to `.md`, and the kernels viewer. Context cap follows the global top-bar selector. |
-| **Research** | Upload PDF / DOCX / TXT / MD / CSV / images and reason over them. Supports up to 128K architectural context, subject to device and runtime memory limits. Research automatically switches to BM25 retrieval when the effective prompt budget is exceeded. A context inspector shows exactly what the model sees. Scanned PDFs get OCR'd by the on-device vision tower with per-page progress and ETA, then export as structured Markdown with page headings and OCR markers. Global context cap is controlled from the top bar. |
+| **Research** | Upload PDF / DOCX / TXT / MD / CSV / images and reason over them. Supports up to 128K architectural context, subject to device and runtime memory limits. Research automatically switches to BM25 retrieval when the effective prompt budget is exceeded — every selected document contributes at least one retrieved block, so documents can be compared. A context inspector shows exactly what the model sees. Scanned PDFs get OCR'd by the on-device vision tower with per-page progress and ETA, then export as structured Markdown with page headings and OCR markers. Global context cap is controlled from the top bar (defaults to 32K). |
 | **Code** | File-aware chat workstation: explorer + editor + chat over project files. See *Code — Chat with files* below. |
 | **Reports** | Staged report generation tuned for greedy decoding: JSON outline → one bounded section at a time → charts emitted as JSON specs rendered by Chart.js (never model-written JS). Export produces a self-contained `.html` with charts baked in as PNGs — it renders offline with zero JavaScript. Global context cap from the top bar applies to each stage. |
 
@@ -64,7 +64,7 @@ reports, parsed documents and code projects (`code-project-v3`). Nothing syncs a
 
 ### Top-bar Context Control
 
-The `Context` selector in the workstation top bar (Auto / 8K / 16K / 32K / 64K / 128K) caps the **effective context window shared across Chat, Research, Code and Reports**. `Auto` lets the device use its full runtime capacity (reported in the status pill as `runtime X K / 128K`). Selecting e.g. `32K` triggers an on-device KV-cache re-allocation and the pill then shows `runtime 32K / 128K` once the allocation succeeds. Lower caps are useful to simulate smaller GPUs or to keep prompts bounded. Research shows a live inspector of what fits; Code's chat panel shows a token estimate and truncates oversize attachments with a visible notice.
+The `Context` selector in the workstation top bar (Auto / 8K / 16K / 32K / 64K / 128K) caps the **effective context window shared across Chat, Research, Code and Reports**. It defaults to **32K**; a one-time migration moves existing profiles to that default, after which your own choice is remembered. `Auto` lets the device use its full runtime capacity (reported in the status pill as `runtime X K / 128K`). Selecting e.g. `64K` triggers an on-device KV-cache re-allocation and the pill then shows `runtime 64K / 128K` once the allocation succeeds. Lower caps are useful to simulate smaller GPUs or to keep prompts bounded. Research shows a live inspector of what fits; Code's chat panel shows a token estimate and truncates oversize attachments with a visible notice.
 
 ### Code — Chat with files
 
@@ -177,6 +177,43 @@ Then open [http://localhost:4173/](http://localhost:4173/) → **Load model** �
 > env / `--throttle-mbps` flag) so IDB commits can keep up. The same file
 > also now handles `HEAD` correctly (engine probes size) and aborts streams
 > on `close`. Disable with `--no-throttle` if you need full loopback speed.
+
+### Option C — Portable single file (no server, no install)
+
+Ship the whole workstation as **one HTML file** plus an assets folder:
+
+```bash
+npm install              # release-only build deps
+npm run vendor:portable  # Pyodide runtime + document parsers (~15 MB)
+npm run build:portable   # → dist/portable/
+```
+
+Copy `dist/portable/` anywhere, open `gemma4-workstation.html` in Chrome or Edge, and either
+pick the `assets` folder (fully offline) or click **Stream from Hugging Face** and let the
+model download itself. No server and no installation either way.
+
+A `file://` page cannot read its sibling files and has no HTTP `Range` support, so
+in offline mode the app reads the weights by slicing the `File` you picked (`Blob.slice`)
+through a shimmed `fetch` — served under a reserved virtual origin and supporting `Range`.
+The engine's own `options.fetch` / `knownSize` / `knownAcceptsRanges` seam takes it from
+there, and the same shim serves the vendored Pyodide runtime and wheels from disk.
+
+To package a downloadable release:
+
+```bash
+npm run build:release   # → dist/release/gemma4-workstation-portable-<version>.zip (67 MB)
+```
+
+The weights are deliberately **not** in it: GitHub release assets must be under 2 GiB per
+file, and the checkpoint is 2.29 GiB raw / 2.02 GiB compressed (the int8 tensors are ~90%
+incompressible). Mode B supplies them instead. See **[PORTABLE.md](PORTABLE.md)** for the
+full picture, the measurements, limits and fallbacks.
+
+Releases are automated: pushing a `v*` tag runs `.github/workflows/release.yml`, which
+checks the tag against `package.json`, vendors the runtime and the model sidecars, runs the
+suite, packages both artifacts and attaches them to the GitHub Release (with the notes
+taken from this changelog). Run it manually to get a draft first. `npm run changelog <ver>`
+prints the section for a version.
 
 ---
 

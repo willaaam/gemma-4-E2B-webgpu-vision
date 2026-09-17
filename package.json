@@ -1,6 +1,6 @@
 {
   "name": "gemma-4-webgpu-kernels",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Gemma 4 E2B (QAT Mobile) fully in the browser with WebGPU — text + vision, 100% on-device. Fork of the webml-community Space with an NVIDIA/Windows subgroup fix and a custom WebGPU vision tower.",
   "type": "module",
   "private": true,
@@ -8,9 +8,20 @@
     "serve": "node tools/serve.mjs 4173",
     "start": "node tools/serve.mjs 4173",
     "vendor:python": "node tools/vendor-python-packages.mjs",
+    "vendor:portable": "node tools/vendor-portable-assets.mjs",
+    "vendor:model": "node tools/vendor-model-sidecars.mjs",
+    "build:portable": "node tools/build-portable.mjs",
+    "build:portable:min": "node tools/build-portable.mjs --no-weights",
+    "build:release": "node tools/build-release.mjs",
+    "changelog": "node tools/changelog-section.mjs",
     "check:release": "node tools/check-release.mjs",
-    "check": "node --check tools/serve.mjs && node --check tools/vendor-python-packages.mjs && node --check tools/check-release.mjs && node --check apps/code/app.js && node --check apps/code/components/explorer.js && node --check apps/code/components/editor-cm.js && node --check apps/code/runners/web-runner.js && node --check apps/code/runners/pyodide-runner.js && node --check apps/code/runners/python-packages.js && node --check sw.js && echo 'tools OK'",
-    "test": "npm run check && npm run check:release"
+    "test:portable": "node testing/asset-fetch.test.mjs",
+    "test:context": "node testing/context-retrieval.test.mjs && node testing/context-preference.test.mjs",
+    "check": "node --check tools/serve.mjs && node --check tools/vendor-python-packages.mjs && node --check tools/vendor-portable-assets.mjs && node --check tools/vendor-model-sidecars.mjs && node --check tools/build-portable.mjs && node --check tools/build-release.mjs && node --check tools/changelog-section.mjs && node --check tools/check-release.mjs && node --check src/lib/asset-store.js && node --check src/lib/asset-fetch.js && node --check src/lib/portable.js && node --check src/services/context.js && node --check src/services/context-preference.js && node --check src/shell/portable-entry.js && node --check src/shell/router.js && node --check apps/code/app.js && node --check apps/code/components/explorer.js && node --check apps/code/components/editor-cm.js && node --check apps/code/runners/web-runner.js && node --check apps/code/runners/pyodide-runner.js && node --check apps/code/runners/python-packages.js && node --check apps/research/app.js && node --check sw.js && echo 'tools OK'",
+    "test": "npm run check && npm run test:portable && npm run test:context && npm run check:release"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "keywords": [
     "webgpu",
@@ -22,5 +33,33 @@
     "on-device",
     "transformers"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.0",
+    "@codemirror/lang-css": "6.3.1",
+    "@codemirror/lang-html": "6.4.12",
+    "@codemirror/lang-javascript": "6.2.5",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/lint": "6.9.7",
+    "@codemirror/state": "6.7.2",
+    "@codemirror/theme-one-dark": "6.1.3",
+    "@codemirror/view": "6.43.10",
+    "@lezer/common": "1.5.2",
+    "@lezer/css": "1.3.6",
+    "@lezer/highlight": "1.2.3",
+    "@lezer/html": "1.3.13",
+    "@lezer/javascript": "1.5.4",
+    "@lezer/lr": "1.4.10",
+    "@lezer/python": "1.1.19",
+    "chart.js": "4.4.3",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.2",
+    "katex": "0.16.11",
+    "mammoth": "1.8.0",
+    "marked": "17.0.6",
+    "pdfjs-dist": "3.11.174",
+    "three": "0.169.0"
+  }
 }

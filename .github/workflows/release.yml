@@ -1,0 +1,145 @@
+name: Release
+
+# Builds the portable release and attaches it to a GitHub Release.
+#
+#   • push a tag (`v3.1.0`)  → publishes the release
+#   • run manually           → creates a DRAFT by default, so you can inspect first
+#
+# The tag must match `package.json`'s version — the step below fails otherwise, because
+# the asset names are derived from the version and a mismatch would ship a file whose
+# name contradicts its contents.
+#
+# What gets attached (see tools/build-release.mjs):
+#   gemma4-workstation-portable-<v>.zip   67 MB  app + full offline runtime, no weights
+#   gemma4-workstation-<v>.html          3.1 MB  the single file on its own
+#   SHA256SUMS.txt                              checksums for both
+#
+# The 2.4 GB checkpoint is deliberately NOT here: GitHub release assets must each be
+# under 2 GiB, and it is 2.29 GiB raw / 2.02 GiB compressed — the QAT int8 tensors are
+# ~90% incompressible, so no compressor closes the gap. The app streams it from the
+# Hugging Face Hub instead. See PORTABLE.md for the measurements.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v3.1.0 (must equal package.json's version)"
+        required: true
+      draft:
+        description: "Create the release as a draft"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # create the release and upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Resolve the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::tag '$tag' must start with 'v' (e.g. v3.1.0)"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
+
+      - name: Check the tag matches package.json
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          pkg="$(node -p "require('./package.json').version")"
+          echo "package.json: $pkg   tag: $VERSION"
+          if [ "$pkg" != "$VERSION" ]; then
+            echo "::error::tag is $VERSION but package.json says $pkg — bump the version first"
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        run: npm ci
+
+      # Cached because the scientific stack is ~148 MB and never changes for a given
+      # Pyodide version; the key changes when PYODIDE_VERSION does.
+      - name: Cache the vendored Pyodide runtime
+        uses: actions/cache@v4
+        with:
+          path: vendor/pyodide
+          key: pyodide-${{ hashFiles('vendor/portable-manifest.json', 'apps/code/runners/pyodide-runner.js') }}
+
+      - name: Vendor the offline runtime
+        run: npm run vendor:portable -- --with-scientific
+
+      # `models/**` is gitignored (so no 2.4 GB checkpoint is ever committed), which
+      # means a fresh clone has no tokenizer or configs. The release needs them.
+      - name: Fetch the model sidecars
+        run: npm run vendor:model
+
+      - name: Test
+        run: npm test
+
+      # Fails the job if an asset would exceed GitHub's 2 GiB per-file limit.
+      - name: Package
+        run: npm run build:release
+
+      - name: Extract the release notes from the changelog
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: node tools/changelog-section.mjs "$VERSION" > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DRAFT_INPUT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — updating notes and re-uploading assets"
+            gh release upload "$TAG" dist/release/* --clobber
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            args=(--title "$TAG" --notes-file "$RUNNER_TEMP/notes.md")
+            if [ "$DRAFT_INPUT" = "true" ]; then args+=(--draft); fi
+            gh release create "$TAG" "${args[@]}" dist/release/*
+          fi
+
+      - name: Summarise
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Release $TAG"
+            echo
+            gh release view "$TAG" --json url,isDraft \
+              --jq '"\(.url)\(if .isDraft then " (draft)" else "" end)"'
+            echo
+            echo "| asset | bytes |"
+            echo "|---|---:|"
+            gh release view "$TAG" --json assets --jq '.assets[] | "| \(.name) | \(.size) |"'
+          } >> "$GITHUB_STEP_SUMMARY"

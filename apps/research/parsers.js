@@ -2,11 +2,38 @@
 // PDF via pdf.js (CDN), DOCX via mammoth (CDN), TXT/MD/JSON/CSV natively.
 // Scanned PDF pages (no text layer) are flagged so the vision tower can OCR them.
 
+import { assetStore } from "../../src/lib/asset-store.js";
+import { blobUrlFor } from "../../src/lib/asset-fetch.js";
+import { isPortable } from "../../src/lib/portable.js";
+
 const CDN = {
   pdf: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js",
   pdfWorker: "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js",
   mammoth: "https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.8.0/mammoth.browser.min.js",
 };
+
+// These are UMD builds, so they cannot be bundled as ES modules: they are injected
+// as classic scripts (and, for pdf.js, a Worker). The portable build serves them
+// from the assets folder as blob URLs, which is the only kind of same-origin URL a
+// `file://` page can hand to a script tag.
+const PORTABLE_FILES = {
+  pdf: "vendor/parser/pdf.min.js",
+  pdfWorker: "vendor/parser/pdf.worker.min.js",
+  mammoth: "vendor/parser/mammoth.browser.min.js",
+};
+
+/** Resolve a parser library to a URL that works in the current mode. */
+function parserUrl(key) {
+  if (!isPortable()) return CDN[key];
+  const url = blobUrlFor(assetStore, PORTABLE_FILES[key]);
+  if (!url) {
+    throw new Error(
+      `Portable build: ${PORTABLE_FILES[key]} is missing from the assets folder. ` +
+      "Re-run `npm run vendor:portable` and copy the assets folder next to this HTML file."
+    );
+  }
+  return url;
+}
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -23,9 +50,9 @@ function loadScript(src) {
 }
 
 async function getPdfJs() {
-  if (!window.pdfjsLib) await loadScript(CDN.pdf);
+  if (!window.pdfjsLib) await loadScript(parserUrl("pdf"));
   const lib = window.pdfjsLib;
-  if (!lib.GlobalWorkerOptions.workerSrc) lib.GlobalWorkerOptions.workerSrc = CDN.pdfWorker;
+  if (!lib.GlobalWorkerOptions.workerSrc) lib.GlobalWorkerOptions.workerSrc = parserUrl("pdfWorker");
   return lib;
 }
 
@@ -88,7 +115,7 @@ async function parsePdf(file, { onProgress } = {}) {
 }
 
 async function parseDocx(file) {
-  if (!window.mammoth) await loadScript(CDN.mammoth);
+  if (!window.mammoth) await loadScript(parserUrl("mammoth"));
   const arrayBuffer = await file.arrayBuffer();
   const result = await window.mammoth.extractRawText({ arrayBuffer });
   return { kind: "docx", text: result.value ?? "", needsOcr: false };

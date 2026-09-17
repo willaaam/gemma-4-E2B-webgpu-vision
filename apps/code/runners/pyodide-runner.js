@@ -7,6 +7,10 @@
 //  - Package installation via micropip / PyPI wheels
 //  - Matplotlib plot auto-drain
 
+import { assetStore } from "../../../src/lib/asset-store.js";
+import { blobUrlFor } from "../../../src/lib/asset-fetch.js";
+import { isPortable, rootUrl } from "../../../src/lib/portable.js";
+
 let pyodide = null;
 let loadingPromise = null;
 let interruptBuffer = null;
@@ -16,7 +20,48 @@ let currentRunAbort = null;
 // Used by resetPythonNamespace to distinguish runtime internals from user state.
 let pristineSnapshot = { modules: [], globals: [] };
 const PYODIDE_VERSION = "0.26.4";
-const INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+const CDN_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+// Portable builds read the vendored Pyodide distribution from the picked assets
+// folder; every file it needs is fetched through the local shim. Served builds keep
+// using the CDN.
+const PORTABLE_PYODIDE_DIR = "vendor/pyodide/";
+const INDEX_URL = rootUrl(PORTABLE_PYODIDE_DIR) ?? CDN_INDEX_URL;
+
+/**
+ * Load the Pyodide entry script. In the portable build it comes from a blob URL,
+ * because a `file://` page cannot load a script (or fetch a file) from disk.
+ */
+async function loadPyodideEntryScript(indexURL) {
+  const script = document.createElement("script");
+  let src = `${indexURL}pyodide.js`;
+
+  if (isPortable()) {
+    // `pyodide.asm.js` is loaded by Pyodide with a dynamic `import()`, which our
+    // fetch shim cannot intercept. Importing it ourselves defines
+    // `globalThis._createPyodideModule`, and Pyodide then skips that step — so
+    // indexURL is only used for the files it *fetches* (wasm, stdlib, lock, wheels),
+    // all of which the shim serves from disk.
+    const asmUrl = blobUrlFor(assetStore, `${PORTABLE_PYODIDE_DIR}pyodide.asm.js`);
+    const entryUrl = blobUrlFor(assetStore, `${PORTABLE_PYODIDE_DIR}pyodide.js`);
+    if (!entryUrl || !asmUrl) {
+      throw new Error(
+        "Portable build: the vendored Pyodide runtime is missing. Select an assets " +
+        `folder that contains ${PORTABLE_PYODIDE_DIR}pyodide.js.`
+      );
+    }
+    await import(/* webpackIgnore: true */ asmUrl);
+    src = entryUrl;
+  }
+
+  script.src = src;
+  const loaded = new Promise((resolve, reject) => {
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Could not load the Pyodide runtime — check that the vendored runtime or network is available."));
+  });
+  document.head.appendChild(script);
+  await loaded;
+}
 
 export function isPyodideLoaded() { return !!pyodide; }
 export function isPythonRunning() { return isExecuting; }
@@ -98,14 +143,7 @@ export async function loadPyodideRuntime({ onStatus } = {}) {
   if (!loadingPromise) {
     loadingPromise = (async () => {
       onStatus?.("Loading Pyodide runtime…");
-      const script = document.createElement("script");
-      script.src = `${INDEX_URL}pyodide.js`;
-      const loaded = new Promise((resolve, reject) => {
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error("Could not download the Pyodide runtime — check your network connection."));
-      });
-      document.head.appendChild(script);
-      await loaded;
+      await loadPyodideEntryScript(INDEX_URL);
       onStatus?.("Booting CPython…");
       pyodide = await globalThis.loadPyodide({ indexURL: INDEX_URL });
 

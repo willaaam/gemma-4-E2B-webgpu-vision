@@ -9,9 +9,16 @@
 // Anything not in the bundle still installs from PyPI as before.
 
 import { getPyodide, loadPyodideRuntime, installedPackages } from "./pyodide-runner.js";
+import { rootUrl } from "../../../src/lib/portable.js";
 
-const MANIFEST_URL = new URL("../../../vendor/python-packages/manifest.json", import.meta.url);
-const WHEEL_BASE_URL = new URL("../../../vendor/python-packages/", import.meta.url);
+// In the portable build these resolve to the virtual asset origin and are served by
+// the local fetch shim out of the picked assets folder (the bundle ships next to it).
+const MANIFEST_URL =
+  rootUrl("vendor/python-packages/manifest.json") ??
+  new URL("../../../vendor/python-packages/manifest.json", import.meta.url);
+const WHEEL_BASE_URL =
+  rootUrl("vendor/python-packages/") ??
+  new URL("../../../vendor/python-packages/", import.meta.url);
 
 let manifestPromise = null;
 let manifest = null;

@@ -56,18 +56,24 @@ corruption on NVIDIA/Windows (D3D12).
 These are loaded from CDNs at runtime and cached by `sw.js`; none are bundled
 into the repository.
 
+> **Portable build:** the single-file release ([PORTABLE.md](PORTABLE.md)) bundles
+these libraries instead, resolved from their official npm packages at build time
+(`tools/build-portable.mjs`) so the app needs no network at all. The licences above
+are unchanged; the code is redistributed in minified bundler output.
+
 ## 5. Python runtime — Pyodide (Code app)
 
 | | |
 |---|---|
 | **Project** | [Pyodide](https://pyodide.org) — CPython compiled to WebAssembly |
 | **Version** | 0.26.4, loaded at runtime from `cdn.jsdelivr.net` (cached by `sw.js`) |
-| **Included in this repo** | **No** — the runtime is fetched from the CDN, never redistributed |
+| **Included in this repo** | **Only when vendored for the portable build** — `npm run vendor:portable` downloads the unmodified distribution into `vendor/pyodide/` (13 MB core; `--with-scientific` adds 148 MB of binary packages). Served builds still fetch it from the CDN and never redistribute it. |
 | **License** | Pyodide is [MPL-2.0](https://github.com/pyodide/pyodide/blob/main/LICENSE); the bundled CPython is [PSF-2.0](https://docs.python.org/3/license.html) |
 
 Packages supplied by the Pyodide distribution (numpy, pandas, matplotlib,
 scipy, scikit-learn, sympy, …) are also loaded from that CDN at runtime and keep
-their own licenses; they are **not** redistributed here.
+their own licenses; when `--with-scientific` is used they are redistributed
+unmodified under `vendor/pyodide/packages/`.
 
 ## 6. Vendored Python packages (offline bundle)
 
@@ -85,6 +91,22 @@ Most bundled packages are MIT / BSD / Apache-2.0 / 0BSD / PSF-2.0 licensed.
 > unmodified as separate works, imported at runtime rather than linked. If your
 > policy excludes copyleft dependencies, remove them from `CURATED` in
 > `tools/vendor-python-packages.mjs` and re-run the script.
+
+---
+
+## 7. Vendored document parsers (portable build)
+
+`vendor/parser/` holds the browser (UMD) builds of the two libraries the Research
+app uses for document import. They cannot be bundled as ES modules, so the portable
+build serves them from the assets folder as `blob:` URLs.
+
+| Library | File | License |
+|---|---|---|
+| [pdf.js](https://github.com/mozilla/pdf.js) | `pdf.min.js`, `pdf.worker.min.js` | [Apache-2.0](https://github.com/mozilla/pdf.js/blob/master/LICENSE) |
+| [mammoth.js](https://github.com/mwilliamson/mammoth.js) | `mammoth.browser.min.js` | [BSD-2-Clause](https://github.com/mwilliamson/mammoth.js/blob/master/LICENSE) |
+
+Both are redistributed **unmodified**, copied from the npm packages pinned in
+`package.json` by `tools/vendor-portable-assets.mjs`.
 
 ---
 

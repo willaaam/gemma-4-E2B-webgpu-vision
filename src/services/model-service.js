@@ -6,10 +6,40 @@ import { Gemma4Mobile } from "./gemma-engine.js";
 import { gemma4SgGuard } from "../../gemma4-sg-guard.js";
 import { Gemma4Vision } from "../../gemma4-vision.js";
 import { VisionGemma4Mobile, installVisionHook } from "../../gemma4-vision-inject.js";
-import { MODEL_CONFIG } from "../model-config.js";
+import { MODEL_CONFIG, weightsAreLocal } from "../model-config.js";
+import { assetStore } from "../lib/asset-store.js";
+import { createLocalFetch } from "../lib/asset-fetch.js";
+import { isPortable } from "../lib/portable.js";
 
-const LOCAL_MODEL_URL = MODEL_CONFIG.mobileGemma.path;
-const VISION_WEIGHTS_URL = new URL("model.safetensors", MODEL_CONFIG.mobileGemma.path).href;
+/**
+ * Portable builds read the weights straight out of the user's picked file.
+ *
+ * A `file://` page has no HTTP Range and cannot fetch sibling files, so we hand the
+ * engine a fetch that answers `Range` requests by slicing the local `File`. Passing
+ * `knownSize` + `knownAcceptsRanges` also skips its HEAD probe, and
+ * `requireRangeRequests` guarantees it never tries to read 2.4 GB in one go.
+ *
+ * Returns null when the weights should come over the network instead: a served build,
+ * or a portable build where the user chose to stream from the Hugging Face Hub. That
+ * is what lets the release ship without the 2.4 GB checkpoint — the app still runs in
+ * full, it just needs a connection for the first load.
+ */
+function portableWeightSource() {
+  if (!isPortable() || !weightsAreLocal()) return null;
+  const file = assetStore.resolveModelFile();
+  if (!file) {
+    // The gate only picks the local path once a model file is present, so this is a
+    // belt-and-braces fallback to the Hub rather than a dead end.
+    console.warn("[portable] no local model.safetensors — streaming from the Hugging Face Hub instead");
+    return null;
+  }
+  return {
+    fetch: createLocalFetch(assetStore, { fallback: globalThis.fetch?.bind(globalThis) }),
+    knownSize: file.size,
+    knownAcceptsRanges: true,
+    requireRangeRequests: true,
+  };
+}
 
 const MAX_LOAD_ATTEMPTS = 2;
 
@@ -97,7 +127,16 @@ async function performLoad() {
     // force:true — Windows may report exact 32/32 and otherwise skip the patcher.
     const guard = await gemma4SgGuard({ force: true });
     console.info("[gemma4-sg-guard]", guard.mode, guard.adapter, guard.selfTest);
-    model = await Gemma4Mobile.load(LOCAL_MODEL_URL, { ...guard.loadOpts, onProgress: updateLoadProgress });
+    // Resolved per load, not at import time: the portable gate may have flipped the
+    // source from the local assets folder to the Hugging Face Hub after modules loaded.
+    const modelUrl = MODEL_CONFIG.mobileGemma.path;
+    const visionUrl = new URL("model.safetensors", modelUrl).href;
+    const localWeights = portableWeightSource();
+    model = await Gemma4Mobile.load(modelUrl, {
+      ...guard.loadOpts,
+      ...(localWeights ?? {}),
+      onProgress: updateLoadProgress,
+    });
     modelService.setStatus("loading", "Warming up kernels…");
     await model.warmup();
 
@@ -107,7 +146,14 @@ async function performLoad() {
     // we don't request a second one — lighter on integrated GPUs.
     modelService.setStatus("loading", "Loading vision tower…");
     installVisionHook();
-    const vision = await Gemma4Vision.load(VISION_WEIGHTS_URL, { host: model.runtime?.host, onProgress: updateVisionProgress });
+    const vision = await Gemma4Vision.load(visionUrl, {
+      host: model.runtime?.host,
+      onProgress: updateVisionProgress,
+      // Same file, same shim; a custom fetch also bypasses the vision IDB cache,
+      // which is fine because local reads are cheap and the cache is unreliable
+      // for multi-hundred-MB blobs.
+      ...(localWeights ? { fetch: localWeights.fetch } : {}),
+    });
     model = new VisionGemma4Mobile(model, vision);
     window.__gemmaVision = vision;
 

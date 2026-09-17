@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
-package-lock.json
+# NOTE: package-lock.json is deliberately NOT ignored — it is tracked, because `npm ci`
+# in CI requires it and a gitignored lockfile invites version drift.
 
 # OS / Editor
 .DS_Store
@@ -10,6 +11,9 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Personal scratch notes — not part of the project
+TODO
 
 # Env / logs
 .env
@@ -42,3 +46,9 @@ models/**
 *.pth
 *.ckpt
 *.h5
+
+# Vendored portable runtime (npm run vendor:portable) — fully reproducible from
+# pinned Pyodide URLs. The small essential core + document parsers stay tracked so a
+# portable build works out of the box; the bulky optional scientific stack is
+# regenerated with `npm run vendor:portable -- --with-scientific`.
+vendor/pyodide/packages/
