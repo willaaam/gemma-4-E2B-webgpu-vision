@@ -17,7 +17,7 @@
 //
 // Usage: node testing/reports-fences.test.mjs
 
-import { stripWrapperFence, extractCharts, parseChartSpec } from "../apps/reports/chart-renderer.js";
+import { stripWrapperFence, extractCharts, parseChartSpec, replaceChartBodies } from "../apps/reports/chart-renderer.js";
 
 let passed = 0;
 const failures = [];
@@ -137,6 +137,76 @@ function buildReport(sections, clean) {
   ], naiveUnwrap));
   check("(old behaviour) the next section was swallowed into a chart spec",
     two.charts.some((c) => c.jsonText.includes("## Outlook")));
+}
+
+// --- the fence TAG: a valid spec must not need ```chart ---------------------
+//
+// Reported from a real report: the model emitted the same valid JSON under a bare ```
+// fence, and because extractCharts matched only ```chart the spec was rendered as an
+// ordinary code block — "charts are still broken". The tag is not reliable at this model
+// size, so a valid spec counts wherever it appears; genuine code blocks stay untouched.
+function fenced(tag, body) {
+  return `\n\`\`\`${tag}\n${body}\n\`\`\`\n`;
+}
+const EQ_SPEC = JSON.stringify({
+  type: "bar",
+  title: "Distribution of EQ Gain Adjustments Across 32 Filters",
+  labels: Array.from({ length: 32 }, (_, i) => `Filter ${i + 1}`),
+  series: [{ label: "Gain (dB)", data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19.64, 20.14, 21.05, 19.05, 0, -4.65, -5, -8, -5.51, 0, 3.55, 2.55, 0, -3.74, -11.03, -7.93, 0, 6.11, 8.84, 12.85, 10.85, 0] }],
+}, null, 2);
+
+check("the EQ spec itself is valid", parseChartSpec(EQ_SPEC).ok);
+
+for (const tag of ["", "json", "chart"]) {
+  const label = tag || "bare";
+  const md = `The distribution is summarized below:${fenced(tag, EQ_SPEC)}\n## Methodology\n\nProse.`;
+  const { html, charts } = extractCharts(md);
+  eq(`fence ${label}: detected as a chart`, charts.length, 1);
+  check(`fence ${label}: its spec is valid`, parseChartSpec(charts[0]?.jsonText ?? "").ok);
+  check(`fence ${label}: JSON is not left visible as text`, !html.includes('"labels"'));
+  check(`fence ${label}: next section survives`, html.includes("## Methodology"));
+}
+
+// Non-chart fences must be left exactly as they were.
+{
+  const { html, charts } = extractCharts("Example:\n\n```python\nprint('hi')\n```\n");
+  eq("python block: not a chart", charts.length, 0);
+  check("python block: left intact", html.includes("```python") && html.includes("print('hi')"));
+}
+{
+  const { html, charts } = extractCharts('Config:\n\n```json\n{"retries":3,"host":"x"}\n```\n');
+  eq("unrelated JSON block: not a chart", charts.length, 0);
+  check("unrelated JSON block: left intact", html.includes('"retries"'));
+}
+// A ```chart block with a broken spec is still a chart, so the error card + Fix shows.
+{
+  const { charts } = extractCharts("```chart\n{ not json }\n```");
+  eq("chart tag with broken JSON: still a chart", charts.length, 1);
+}
+// A bare fence with broken JSON is not a chart — most likely just a code block.
+{
+  const { charts } = extractCharts("```\n{ not json }\n```");
+  eq("bare fence with broken JSON: not a chart", charts.length, 0);
+}
+
+// --- replaceChartBodies: the Fix button's write-back -------------------------
+{
+  const md = `Intro${fenced("", EQ_SPEC)}\nMiddle\n\n\`\`\`python\nprint(1)\n\`\`\`\n\n${fenced("chart", EQ_SPEC)}`;
+  const { charts } = extractCharts(md);
+  eq("replace: two charts found", charts.length, 2);
+  const fixed = JSON.stringify({ type: "line", title: "Fixed", labels: ["A", "B"], series: [{ label: "s", data: [1, 2] }] });
+  const out = replaceChartBodies(md, charts.map((c) => ({ ...c, jsonText: fixed })));
+  eq("replace: both blocks rewritten", out.split(fixed).length - 1, 2);
+  check("replace: the bare fence tag is preserved", out.includes("```\n" + fixed + "\n```"));
+  check("replace: the chart fence tag is preserved", out.includes("```chart\n" + fixed + "\n```"));
+  check("replace: the python block is untouched", out.includes("print(1)"));
+  eq("replace: result re-extracts to two charts", extractCharts(out).charts.length, 2);
+  check("replace: other prose survives", out.includes("Intro") && out.includes("Middle"));
+}
+{
+  const md = `Intro${fenced("chart", EQ_SPEC)}`;
+  const { charts } = extractCharts(md);
+  eq("replace: count mismatch is refused", replaceChartBodies(md, charts.slice(1)), md);
 }
 
 // --- report ------------------------------------------------------------------

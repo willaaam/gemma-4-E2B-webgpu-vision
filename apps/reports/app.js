@@ -11,7 +11,7 @@ import { db, newId } from "../../src/services/db.js";
 import { thinkMessages } from "../../src/services/settings.js";
 import { selectedContextLimit } from "../../src/services/context-preference.js";
 import { renderMarkdown, escapeHtml } from "../../src/lib/markdown.js";
-import { extractCharts, renderChartsIn, parseChartSpec, renderLightPng, stripWrapperFence } from "./chart-renderer.js";
+import { extractCharts, renderChartsIn, parseChartSpec, renderLightPng, stripWrapperFence, replaceChartBodies } from "./chart-renderer.js";
 
 const TEMPLATES = {
   status: {
@@ -335,12 +335,11 @@ function renderPreview(md) {
         if (fixed && parseChartSpec(fixed).ok) {
           const idx = currentCharts.findIndex((c) => c.jsonText === jsonText);
           if (idx >= 0) {
-            currentCharts[idx].jsonText = fixed;
-            const rebuilt = currentCharts.map((c) => "```chart\n" + c.jsonText + "\n```").join("\n\n");
-            // splice back into markdown by replacing chart blocks in order
-            let n = 0;
-            currentMarkdown = currentMarkdown.replace(/```chart\r?\n[\s\S]*?```/g, () => "```chart\n" + currentCharts[n++].jsonText + "\n```");
-            void rebuilt;
+            currentCharts[idx] = { ...currentCharts[idx], jsonText: fixed };
+            // Replaced through the same matcher that found the charts, so a block fenced
+            // with a bare ``` or ```json is corrected too — matching on ```chart here
+            // meant the Fix button appeared to work and then wrote nothing back.
+            currentMarkdown = replaceChartBodies(currentMarkdown, currentCharts);
             renderPreview(currentMarkdown);
             els.source.textContent = currentMarkdown;
           }

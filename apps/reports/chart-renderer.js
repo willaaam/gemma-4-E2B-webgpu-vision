@@ -76,16 +76,69 @@ export function stripWrapperFence(text) {
   return lines.slice(1, -1).join("\n").trim();
 }
 
-// Extract ```chart fenced blocks from markdown and replace them with placeholder
-// divs that renderChartInto can fill. Returns { html, charts: [{id, jsonText}] }.
+// Find the fenced blocks that are charts.
+//
+// A block counts as a chart when it says so (```chart) or when its body is a *valid* chart
+// spec. The tag cannot be relied on: a 2.3B model on greedy decode routinely writes a bare
+// ``` or ```json fence around the very same JSON, and requiring the tag meant a perfectly
+// good spec rendered as a code block instead of a chart. Requiring the body to parse keeps
+// that permissive for charts without hijacking genuine code blocks.
+//
+// `chart` keeps its old behaviour (an invalid spec still becomes a chart, so the error card
+// with its Fix button appears); anything else must actually validate.
+//
+// Shared by extraction and replacement so the two can never disagree about which block is
+// which — they used to, and the Fix button silently failed to write back.
+function chartBlocks(markdown) {
+  const text = String(markdown ?? "");
+  const re = /```([A-Za-z0-9_+-]*)[ \t]*\r?\n([\s\S]*?)```/g;
+  const blocks = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const jsonText = m[2].trim();
+    const declared = /^chart$/i.test(m[1]);
+    const isChart = declared || (/^\s*\{/.test(jsonText) && parseChartSpec(jsonText).ok);
+    if (isChart) {
+      blocks.push({ start: m.index, end: re.lastIndex, tag: m[1], jsonText });
+    }
+  }
+  return { text, blocks };
+}
+
+// Extract chart blocks from markdown and replace them with placeholder divs that
+// renderChartsIn can fill. Returns { html, charts: [{id, jsonText}] }.
 export function extractCharts(markdown) {
+  const { text, blocks } = chartBlocks(markdown);
   const charts = [];
-  const html = String(markdown ?? "").replace(/```chart\r?\n([\s\S]*?)```/g, (_, json) => {
+  if (!blocks.length) return { html: text, charts };
+
+  let html = "";
+  let cursor = 0;
+  for (const block of blocks) {
     const id = `ws-chart-${charts.length}`;
-    charts.push({ id, jsonText: json.trim() });
-    return `<div class="ws-chart-holder" data-chart-id="${id}"></div>`;
-  });
-  return { html, charts };
+    charts.push({ id, jsonText: block.jsonText });
+    html += text.slice(cursor, block.start)
+      + `<div class="ws-chart-holder" data-chart-id="${id}"></div>`;
+    cursor = block.end;
+  }
+  return { html: html + text.slice(cursor), charts };
+}
+
+// Swap corrected JSON back into the chart blocks, in order, keeping each block's original
+// fence tag. Returns the markdown untouched when the counts disagree, so a mismatch can
+// never silently mangle the report.
+export function replaceChartBodies(markdown, charts) {
+  const { text, blocks } = chartBlocks(markdown);
+  if (blocks.length !== charts.length) return text;
+
+  let out = "";
+  let cursor = 0;
+  for (const [i, block] of blocks.entries()) {
+    out += text.slice(cursor, block.start)
+      + `\`\`\`${block.tag}\n${charts[i].jsonText}\n\`\`\``;
+    cursor = block.end;
+  }
+  return out + text.slice(cursor);
 }
 
 // Render all chart placeholders inside a container. Invalid specs show an

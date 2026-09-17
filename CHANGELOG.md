@@ -5,7 +5,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-_No changes yet._
+### Fixed
+
+- **Reports: charts went unrendered when the fence was not tagged `chart`** — extraction
+  matched only the literal chart-tagged fence, but that tag is not reliable at this model
+  size: a real report came back with the same valid JSON under a bare fence, so a perfectly
+  good spec was rendered as an ordinary code block with its JSON visible as text. A fenced
+  block now counts as a chart when it is tagged `chart` **or** when its body parses as a
+  valid chart spec — so bare and `json`-tagged fences both work, while genuine code blocks
+  and unrelated JSON are left alone, and a chart-tagged block with broken JSON still shows
+  the error card and its Fix button. The Fix button's write-back shared the root cause: it
+  rewrote only chart-tagged blocks, so correcting a chart under a bare fence appeared to
+  work and then saved nothing. Extraction and replacement now share one matcher
+  (`replaceChartBodies`) so the two cannot disagree. `npm run test:reports` covers all of
+  this — 50 assertions, including the reported spec verbatim.
 
 ## [3.2.1] — 2026-09-17
 
