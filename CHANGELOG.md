@@ -5,6 +5,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+_No changes yet._
+
+## [3.2.1] — 2026-09-17
+
 ### Fixed
 
 - **Reports: a chart at the end of a section broke that section** — sections are generated
